@@ -8,7 +8,8 @@ import { Card, CardHeader } from '@/components/ui/Card';
 import { Field, Select, TextInput } from '@/components/ui/Field';
 import { Combobox } from '@/components/ui/Combobox';
 import { useToast } from '@/lib/toast';
-import { useCircles, useCreateDpr, useDivisions } from './api';
+import { useCircles, useDivisions, useStations, useZones } from '@/features/locations/api';
+import { useCreateDpr } from './api';
 import { approvalRouteFor } from './routing';
 import { newDprSchema, type NewDprForm } from './schema';
 import { PROJECT_TYPES, VOLTAGE_CLASSES, type CreatedDpr } from './types';
@@ -19,8 +20,10 @@ const DEFAULTS: NewDprForm = {
   voltageClass: '66 kV',
   capacity: '',
   location: '',
+  zoneId: '',
   circleId: '',
   divisionId: '',
+  stationCode: '',
 };
 
 function Section({ title, description, children }: { title: string; description: string; children: ReactNode }) {
@@ -55,12 +58,15 @@ function SuccessPanel({ dpr, onAnother }: { dpr: CreatedDpr; onAnother: () => vo
           <dd className="text-right text-gray-900">{dpr.finalApprover}</dd>
         </div>
       </dl>
-      <div className="mt-6 flex justify-center gap-2">
+      <div className="mt-6 flex flex-wrap justify-center gap-2">
         <button type="button" className="btn-secondary" onClick={onAnother}>
           Initialize another
         </button>
-        <Link to={`/reports?q=${encodeURIComponent(dpr.id)}`} className="btn-primary">
+        <Link to={`/reports?q=${encodeURIComponent(dpr.id)}`} className="btn-secondary">
           View in reports
+        </Link>
+        <Link to={`/documents?dpr=${encodeURIComponent(dpr.id)}`} className="btn-primary">
+          Add documents
         </Link>
       </div>
     </Card>
@@ -75,17 +81,22 @@ export function InitializationPage() {
     control,
     handleSubmit,
     watch,
+    getValues,
     setValue,
     reset,
     formState: { errors },
   } = useForm<NewDprForm>({ resolver: zodResolver(newDprSchema), defaultValues: DEFAULTS, mode: 'onTouched' });
 
+  const zoneId = watch('zoneId');
   const circleId = watch('circleId');
+  const divisionId = watch('divisionId');
   const voltageClass = watch('voltageClass');
   const route = approvalRouteFor(voltageClass);
 
-  const circles = useCircles();
-  const divisions = useDivisions(circleId || undefined);
+  const zones = useZones();
+  const circles = useCircles(zoneId);
+  const divisions = useDivisions(circleId);
+  const stations = useStations(divisionId);
   const create = useCreateDpr();
 
   const onSubmit = handleSubmit(async (values) => {
@@ -100,7 +111,12 @@ export function InitializationPage() {
 
   // Same office is the common case for a batch of DPRs, so keep circle and division.
   const another = () => {
-    reset({ ...DEFAULTS, circleId: created?.circleId ?? '', divisionId: created?.divisionId ?? '' });
+    reset({
+      ...DEFAULTS,
+      zoneId: created?.zoneId ?? '',
+      circleId: created?.circleId ?? '',
+      divisionId: created?.divisionId ?? '',
+    });
     create.reset();
     setCreated(null);
   };
@@ -138,23 +154,48 @@ export function InitializationPage() {
                 <Field id="location" label="Location / place" required error={err('location')}>
                   <TextInput id="location" placeholder="Channapatna" invalid={!!errors.location} {...register('location')} />
                 </Field>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <Field id="circleId" label="Circle" required error={err('circleId')}>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <Field id="zoneId" label="Zone" required error={err('zoneId')}>
+                    <Controller
+                      control={control}
+                      name="zoneId"
+                      render={({ field }) => (
+                        <Combobox
+                          id="zoneId"
+                          options={zones}
+                          value={field.value}
+                          onChange={(v) => {
+                            field.onChange(v);
+                            setValue('circleId', '');
+                            setValue('divisionId', '');
+                            setValue('stationCode', '');
+                          }}
+                          onBlur={field.onBlur}
+                          placeholder="Search zones"
+                          invalid={!!errors.zoneId}
+                        />
+                      )}
+                    />
+                  </Field>
+                  <Field id="circleId" label="Circle" required error={err('circleId')} hint={zoneId ? undefined : 'Choose a zone first'}>
                     <Controller
                       control={control}
                       name="circleId"
                       render={({ field }) => (
                         <Combobox
                           id="circleId"
-                          options={circles.data ?? []}
+                          options={circles}
                           value={field.value}
                           onChange={(v) => {
                             field.onChange(v);
                             setValue('divisionId', '');
+                            setValue('stationCode', '');
                           }}
                           onBlur={field.onBlur}
-                          placeholder={circles.isPending ? 'Loading…' : 'Search circles'}
+                          disabled={!zoneId}
+                          placeholder="Search circles"
                           invalid={!!errors.circleId}
+                          describedBy={zoneId ? undefined : 'circleId-hint'}
                         />
                       )}
                     />
@@ -166,9 +207,12 @@ export function InitializationPage() {
                       render={({ field }) => (
                         <Combobox
                           id="divisionId"
-                          options={divisions.data ?? []}
+                          options={divisions}
                           value={field.value}
-                          onChange={field.onChange}
+                          onChange={(v) => {
+                            field.onChange(v);
+                            setValue('stationCode', '');
+                          }}
                           onBlur={field.onBlur}
                           disabled={!circleId}
                           placeholder="Search divisions"
@@ -179,6 +223,32 @@ export function InitializationPage() {
                     />
                   </Field>
                 </div>
+                <Field
+                  id="stationCode"
+                  label="Existing station"
+                  hint={divisionId ? 'Optional. Pick the station this DPR is about, if it already exists.' : 'Optional. Choose a division first.'}
+                >
+                  <Controller
+                    control={control}
+                    name="stationCode"
+                    render={({ field }) => (
+                      <Combobox
+                        id="stationCode"
+                        options={(stations.data ?? []).map((s) => ({ id: s.code, name: `${s.name} (${s.voltage})` }))}
+                        value={field.value}
+                        onChange={(v) => {
+                          field.onChange(v);
+                          const picked = stations.data?.find((s) => s.code === v);
+                          if (picked && !getValues('location').trim()) setValue('location', picked.name, { shouldValidate: true });
+                        }}
+                        onBlur={field.onBlur}
+                        disabled={!divisionId}
+                        placeholder={stations.isPending && divisionId ? 'Loading stations…' : 'Search stations'}
+                        describedBy="stationCode-hint"
+                      />
+                    )}
+                  />
+                </Field>
               </Section>
 
               <div className="flex flex-col-reverse gap-2 rounded-b-lg border-t border-gray-200 bg-gray-50 px-4 py-3 sm:flex-row sm:justify-end sm:px-6">

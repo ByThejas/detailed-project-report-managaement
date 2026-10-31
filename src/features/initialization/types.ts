@@ -4,25 +4,17 @@ export type ProjectType = (typeof PROJECT_TYPES)[number];
 export const VOLTAGE_CLASSES = ['66 kV', '110 kV', '220 kV', '400 kV'] as const;
 export type VoltageClass = (typeof VOLTAGE_CLASSES)[number];
 
-export interface Circle {
-  id: string;
-  name: string;
-}
-
-export interface Division {
-  id: string;
-  name: string;
-  circleId: string;
-}
-
 export interface NewDprRequest {
   projectName: string;
   projectType: ProjectType;
   voltageClass: VoltageClass;
   capacity: string;
   location: string;
+  zoneId: string;
   circleId: string;
   divisionId: string;
+  /** Existing station the DPR is about; empty for a new site. */
+  stationCode: string;
 }
 
 export interface CreatedDpr extends NewDprRequest {

@@ -8,7 +8,8 @@ import { Pagination } from '@/components/ui/Pagination';
 import { ProgressBar } from '@/components/ui/ProgressBar';
 import { exportToExcel } from '@/lib/exportExcel';
 import { useToast } from '@/lib/toast';
-import { describeFilters, excelColumns, filterRows, type RegisterFilters } from './register';
+import { circleNames, divisionNames, zoneNames } from '@/features/locations/lookup';
+import { describeFilters, excelColumns, filterRows, NO_FILTERS, type RegisterFilters } from './register';
 import { stageTone } from './stage';
 import { STAGES, type DprRow } from './types';
 
@@ -17,7 +18,7 @@ const PAGE_SIZE = 10;
 function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: readonly string[] }) {
   return (
     <div className="relative">
-      <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} className="input w-auto appearance-none pr-7">
+      <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} className="input w-auto max-w-[190px] appearance-none truncate pr-7">
         <option value="">{`All ${label.toLowerCase()}s`}</option>
         {options.map((o) => (
           <option key={o} value={o}>
@@ -38,6 +39,8 @@ function useFilters() {
       q: params.get('q') ?? '',
       stream: (params.get('stream') as RegisterFilters['stream']) ?? '',
       stage: (params.get('stage') as RegisterFilters['stage']) ?? '',
+      zone: params.get('zone') ?? '',
+      circle: params.get('circle') ?? '',
       division: params.get('division') ?? '',
     }),
     [params],
@@ -58,8 +61,9 @@ export function DprRegisterCard({ rows }: { rows: DprRow[] }) {
   const toast = useToast();
 
   const filtered = useMemo(() => filterRows(rows, filters), [rows, filters]);
-  const divisions = useMemo(() => [...new Set(rows.map((r) => r.division))].sort(), [rows]);
-  const active = Boolean(filters.q || filters.stream || filters.stage || filters.division);
+  const circleOptions = useMemo(() => circleNames(filters.zone), [filters.zone]);
+  const divisionOptions = useMemo(() => divisionNames(filters.zone, filters.circle), [filters.zone, filters.circle]);
+  const active = Boolean(filters.q || filters.stream || filters.stage || filters.zone || filters.circle || filters.division);
 
   const pageCount = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
   const current = Math.min(page, pageCount);
@@ -140,9 +144,11 @@ export function DprRegisterCard({ rows }: { rows: DprRow[] }) {
             </div>
             <FilterSelect label="Type" value={filters.stream} onChange={(v) => update({ stream: v as RegisterFilters['stream'] })} options={['Greenfield', 'Brownfield']} />
             <FilterSelect label="Stage" value={filters.stage} onChange={(v) => update({ stage: v as RegisterFilters['stage'] })} options={STAGES} />
-            <FilterSelect label="Division" value={filters.division} onChange={(v) => update({ division: v })} options={divisions} />
+            <FilterSelect label="Zone" value={filters.zone} onChange={(v) => update({ zone: v, circle: '', division: '' })} options={zoneNames} />
+            <FilterSelect label="Circle" value={filters.circle} onChange={(v) => update({ circle: v, division: '' })} options={circleOptions} />
+            <FilterSelect label="Division" value={filters.division} onChange={(v) => update({ division: v })} options={divisionOptions} />
             {active && (
-              <button type="button" className="btn-ghost" onClick={() => update({ q: '', stream: '', stage: '', division: '' })}>
+              <button type="button" className="btn-ghost" onClick={() => update(NO_FILTERS)}>
                 Clear filters
               </button>
             )}
@@ -153,7 +159,7 @@ export function DprRegisterCard({ rows }: { rows: DprRow[] }) {
               icon={Search}
               title="No DPRs match these filters"
               action={
-                <button type="button" className="btn-secondary" onClick={() => update({ q: '', stream: '', stage: '', division: '' })}>
+                <button type="button" className="btn-secondary" onClick={() => update(NO_FILTERS)}>
                   Clear filters
                 </button>
               }

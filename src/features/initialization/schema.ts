@@ -10,8 +10,10 @@ export const newDprSchema = z.object({
   voltageClass: z.enum(VOLTAGE_CLASSES),
   capacity: z.string().trim().regex(CAPACITY_PATTERN, 'Use the form 1x16 MVA'),
   location: z.string().trim().min(2, 'Enter the location or place'),
+  zoneId: z.string().min(1, 'Choose a zone'),
   circleId: z.string().min(1, 'Choose a circle'),
   divisionId: z.string().min(1, 'Choose a division'),
+  stationCode: z.string(),
 });
 
 export type NewDprForm = z.infer<typeof newDprSchema>;

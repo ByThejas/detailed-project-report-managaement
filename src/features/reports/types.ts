@@ -17,8 +17,11 @@ export interface DprRow {
   stream: Stream;
   voltage: string;
   capacity: string;
+  zone: string;
   circle: string;
   division: string;
+  /** Existing station, or empty for a new site. */
+  station: string;
   stage: Stage;
   /** 0–100 */
   progress: number;

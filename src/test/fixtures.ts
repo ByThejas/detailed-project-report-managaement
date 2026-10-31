@@ -2,14 +2,16 @@ import type { DprRow } from '@/features/reports/types';
 import { sampleStore } from '@/lib/sampleStore';
 
 export const row = (over: Partial<DprRow> = {}): DprRow => ({
-  id: 'DPR/ALI/2026/0001',
+  id: 'DPR/PEE/2026/0001',
   project: '110/11kV Channapatna New S/S',
   location: 'Channapatna',
   stream: 'Greenfield',
   voltage: '110 kV',
   capacity: '1x16 MVA',
-  circle: 'Bengaluru Circle',
-  division: 'Alipura',
+  zone: 'BANGALORE',
+  circle: 'BMAZ NORTH',
+  division: 'PEENYA',
+  station: '',
   stage: 'Data Pending',
   progress: 0,
   createdAt: '2026-10-31T09:00:00.000Z',

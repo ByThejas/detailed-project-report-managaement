@@ -3,6 +3,7 @@ import { AppLayout } from '@/layouts/AppLayout';
 import { DashboardPage } from '@/features/dashboard/DashboardPage';
 import { InitializationPage } from '@/features/initialization/InitializationPage';
 import { ReportsPage } from '@/features/reports/ReportsPage';
+import { DocumentsPage } from '@/features/documents/DocumentsPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 
 export const routes = [
@@ -13,6 +14,7 @@ export const routes = [
       { path: 'dashboard', element: <DashboardPage /> },
       { path: 'initialization', element: <InitializationPage /> },
       { path: 'reports', element: <ReportsPage /> },
+      { path: 'documents', element: <DocumentsPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

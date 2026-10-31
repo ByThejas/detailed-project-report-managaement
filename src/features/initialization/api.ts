@@ -1,29 +1,9 @@
-import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
-import { apiGet, apiPost, useSampleData } from '@/lib/apiClient';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { apiPost, useSampleData } from '@/lib/apiClient';
 import { sampleStore } from '@/lib/sampleStore';
-import { circlesSample, divisionsSample } from '@/mocks/masterData';
+import { getCircle, getDivision, getZone } from '@/features/locations/lookup';
 import { approvalRouteFor } from './routing';
-import type { Circle, CreatedDpr, Division, NewDprRequest } from './types';
-
-export function useCircles() {
-  return useQuery({
-    queryKey: ['master', 'circles'],
-    queryFn: ({ signal }) => (useSampleData ? Promise.resolve(circlesSample) : apiGet<Circle[]>('/api/v1/circles', signal)),
-    staleTime: Infinity,
-  });
-}
-
-export function useDivisions(circleId: string | undefined) {
-  return useQuery({
-    queryKey: ['master', 'divisions', circleId],
-    enabled: Boolean(circleId),
-    queryFn: ({ signal }) =>
-      useSampleData
-        ? Promise.resolve(divisionsSample.filter((d) => d.circleId === circleId))
-        : apiGet<Division[]>(`/api/v1/circles/${circleId}/divisions`, signal),
-    staleTime: Infinity,
-  });
-}
+import type { CreatedDpr, NewDprRequest } from './types';
 
 /** DPR/<first 3 letters of division>/<year>/<4-digit sequence>, e.g. DPR/ALI/2026/0001 */
 export function dprId(divisionName: string, year: number, seq: number) {
@@ -33,8 +13,14 @@ export function dprId(divisionName: string, year: number, seq: number) {
 
 async function createSample(req: NewDprRequest): Promise<CreatedDpr> {
   const route = approvalRouteFor(req.voltageClass);
-  const circle = circlesSample.find((c) => c.id === req.circleId)?.name ?? req.circleId;
-  const division = divisionsSample.find((d) => d.id === req.divisionId)?.name ?? req.divisionId;
+  const zone = getZone(req.zoneId)?.name ?? req.zoneId;
+  const circle = getCircle(req.circleId)?.name ?? req.circleId;
+  const division = getDivision(req.divisionId)?.name ?? req.divisionId;
+  let station = '';
+  if (req.stationCode) {
+    const { stations } = await import('@/data/stations');
+    station = stations.find((s) => s[0] === req.stationCode)?.[1] ?? '';
+  }
   const now = new Date();
   const id = dprId(division, now.getFullYear(), sampleStore.list().length + 1);
 
@@ -45,8 +31,10 @@ async function createSample(req: NewDprRequest): Promise<CreatedDpr> {
     stream: req.projectType,
     voltage: req.voltageClass,
     capacity: req.capacity.trim(),
+    zone,
     circle,
     division,
+    station,
     stage: 'Data Pending',
     progress: 0,
     createdAt: now.toISOString(),

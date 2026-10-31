@@ -20,21 +20,21 @@ describe('Dashboard', () => {
   });
 
   it('summarises stored DPRs and filters the division table', async () => {
-    seed([row({ id: 'a' }), row({ id: 'b', division: 'Tumakuru', stage: 'Generated' })]);
+    seed([row({ id: 'a' }), row({ id: 'b', division: 'TUMKUR', stage: 'Generated' })]);
     renderAt('/dashboard');
     const counts = await screen.findByRole('region', { name: 'DPR counts' });
     expect(within(counts).getByText('Total DPRs').nextSibling).toHaveTextContent('2');
 
     await userEvent.type(screen.getByPlaceholderText('Filter divisions'), 'tum');
     const table = screen.getByRole('table');
-    expect(within(table).getByRole('link', { name: 'Tumakuru' })).toHaveAttribute('href', '/reports?division=Tumakuru');
-    expect(within(table).queryByText('Alipura')).not.toBeInTheDocument();
+    expect(within(table).getByRole('link', { name: 'TUMKUR' })).toHaveAttribute('href', '/reports?division=TUMKUR');
+    expect(within(table).queryByText('PEENYA')).not.toBeInTheDocument();
   });
 
-  it('shows only Dashboard, DPR Initialization and DPR Reports in the menu', async () => {
+  it('shows only Dashboard, DPR Initialization, DPR Reports and Documents in the menu', async () => {
     renderAt('/dashboard');
     const nav = await screen.findByRole('navigation', { name: 'Main' });
-    expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(['Dashboard', 'DPR Initialization', 'DPR Reports']);
+    expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(['Dashboard', 'DPR Initialization', 'DPR Reports', 'Documents']);
   });
 
   it('hides the sidebar with the toggle and remembers it', async () => {

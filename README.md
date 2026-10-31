@@ -2,7 +2,7 @@
 
 Team web app for managing KPTCL Detailed Project Reports (DPRs).
 
-The admin menu has three items:
+The admin menu has four items:
 
 - **Dashboard**: DPR counts, a pipeline by lifecycle stage, breakdowns by voltage class
   and project type, budget, and completion by division. Every stage and division links to
@@ -12,6 +12,13 @@ The admin menu has three items:
 - **DPR Reports**: every DPR, filterable by text, project type, stage and division, with
   **Download Excel** (.xlsx of all rows matching the filters). Filters are kept in the URL,
   so a filtered view can be bookmarked or shared.
+
+- **Documents**: choose an active DPR (search by ID or project name), then attach files to
+  each required document in three groups (Core, Statutory, Compensation & deposits). Each
+  document shows its source, whether it is mandatory, its status and file count.
+  **Submit to Consultant** unlocks once every mandatory document has a file, asks for
+  confirmation, then locks the files. Statuses: Awaiting (no file), Uploaded (file attached),
+  Pending (sent to the consultant), N/A (optional document marked not applicable).
 
 The app starts with no DPRs. Each page shows an empty state until the first DPR is created.
 
@@ -48,14 +55,20 @@ dashboard then calls `GET /api/v1/dashboard/summary`, which must return the
 
 | Call | Purpose |
 | --- | --- |
-| `GET /api/v1/circles` | Circle list for the search box |
-| `GET /api/v1/circles/{id}/divisions` | Divisions of one circle |
 | `POST /api/v1/dprs` | Create a DPR (`NewDprRequest` in `src/features/initialization/types.ts`) |
 
-Sample circles and divisions are in `src/mocks/masterData.ts`; they are placeholders,
-not KPTCL's real list. Approval routing lives in `src/features/initialization/routing.ts`:
+Approval routing lives in `src/features/initialization/routing.ts`:
 66 kV comes from the old system (CGM (Tech) Corporate Office, group 66/110 kV); 110 kV
 is assumed to match; 220 kV and 400 kV approvers are still to be confirmed.
+
+### Locations
+
+The Zone > Circle > Division > Station tree comes from the KPTCL workbook
+(`data/tree_map_KPTCL.xlsx`): 6 zones, 15 circles, 58 divisions, 1,443 stations. It is
+turned into `src/data/locations.ts` and `src/data/stations.ts` by
+`npm run generate:locations` (optionally `-- path/to/new.xlsx`). Do not edit those files by
+hand. The script fixes station codes that Excel damaged, ignores repeated rows and prints
+what it found. DPR Initialization and the Reports filters use this tree.
 
 ### DPR Reports API
 
@@ -87,9 +100,12 @@ src/
     dashboard/       Dashboard page, summary calculation, API hook, components
     initialization/  New-DPR form, schema, approval routing, API hooks
     reports/         DPR report table, URL filters, Excel export, programme reports
+    documents/       Document checklist per DPR, file attach, submit to consultant
+    locations/       Location types, lookups and hooks over the generated data
   hooks/          usePageTitle, usePersistentState
   lib/            API client, sample store, storage, formatting, toasts, session
-  mocks/          Reference data (circles, divisions, report schedule)
+  data/           Generated KPTCL locations (zones, circles, divisions, stations)
+  mocks/          Report schedule (reference data)
   pages/          404 page
   test/           Test setup, render helper, fixtures
 ```

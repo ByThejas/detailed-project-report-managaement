@@ -10,9 +10,9 @@ const register = () => screen.findByRole('region', { name: 'DPR report' });
 const bodyRows = (card: HTMLElement) => within(within(card).getByRole('table')).getAllByRole('row').slice(1);
 
 const rows = [
-  row({ id: 'DPR/ALI/2026/0001', project: 'Hassan new S/S', stream: 'Greenfield' }),
-  row({ id: 'DPR/TUM/2026/0002', project: 'Hassan augmentation', stream: 'Brownfield', division: 'Tumakuru', stage: 'Draft' }),
-  row({ id: 'DPR/BEL/2026/0003', project: 'Belagavi bay', stream: 'Brownfield', division: 'Belagavi' }),
+  row({ id: 'DPR/PEE/2026/0001', project: 'Hassan new S/S', stream: 'Greenfield' }),
+  row({ id: 'DPR/TUM/2026/0002', project: 'Hassan augmentation', stream: 'Brownfield', division: 'TUMKUR', stage: 'Draft' }),
+  row({ id: 'DPR/BEL/2026/0003', project: 'Belagavi bay', stream: 'Brownfield', division: 'BELGAUM' }),
 ];
 
 describe('DPR Reports', () => {
@@ -38,7 +38,7 @@ describe('DPR Reports', () => {
     const card = await register();
     await userEvent.selectOptions(within(card).getByRole('combobox', { name: 'Type' }), 'Brownfield');
     expect(bodyRows(card)).toHaveLength(2);
-    await userEvent.selectOptions(within(card).getByRole('combobox', { name: 'Division' }), 'Belagavi');
+    await userEvent.selectOptions(within(card).getByRole('combobox', { name: 'Division' }), 'BELGAUM');
     expect(bodyRows(card)).toHaveLength(1);
     await userEvent.click(within(card).getByRole('button', { name: 'Clear filters' }));
     expect(bodyRows(card)).toHaveLength(3);
@@ -58,7 +58,7 @@ describe('DPR Reports', () => {
     const card = await register();
     await userEvent.type(within(card).getByRole('searchbox', { name: 'Filter DPRs' }), 'hassan');
     expect(bodyRows(card)).toHaveLength(2);
-    await userEvent.selectOptions(within(card).getByRole('combobox', { name: 'Division' }), 'Belagavi');
+    await userEvent.selectOptions(within(card).getByRole('combobox', { name: 'Division' }), 'BELGAUM');
     expect(within(card).getByText('No DPRs match these filters')).toBeInTheDocument();
     expect(within(card).getByRole('button', { name: 'Download Excel' })).toBeDisabled();
   });

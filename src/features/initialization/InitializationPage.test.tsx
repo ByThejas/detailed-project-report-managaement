@@ -16,15 +16,37 @@ describe('DPR Initialization', () => {
     expect(await screen.findByText(/Enter the project name/)).toBeInTheDocument();
     expect(screen.getByText('Use the form 1x16 MVA')).toBeInTheDocument();
     expect(screen.getByText('Enter the location or place')).toBeInTheDocument();
+    expect(screen.getByText('Choose a zone')).toBeInTheDocument();
     expect(screen.getByText('Choose a circle')).toBeInTheDocument();
     expect(screen.getByText('Choose a division')).toBeInTheDocument();
   });
 
-  it('keeps Division disabled until a circle is chosen', async () => {
+  it('opens Circle, Division and Station one level at a time from the real KPTCL tree', async () => {
     renderAt('/initialization');
-    expect(await screen.findByRole('combobox', { name: /Division/ })).toBeDisabled();
-    await pickFromCombobox(/Circle/, 'Beng', 'Bengaluru Circle');
-    expect(screen.getByRole('combobox', { name: /Division/ })).toBeEnabled();
+    expect(await screen.findByRole('combobox', { name: /Circle/ })).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: /Division/ })).toBeDisabled();
+    expect(screen.getByRole('combobox', { name: /Existing station/ })).toBeDisabled();
+
+    await pickFromCombobox(/Zone/, 'bang', 'BANGALORE');
+    expect(screen.getByRole('combobox', { name: /Circle/ })).toBeEnabled();
+    await userEvent.click(screen.getByRole('combobox', { name: /Circle/ }));
+    // Only the circles of the chosen zone are offered.
+    expect(screen.getByRole('option', { name: 'BMAZ NORTH' })).toBeInTheDocument();
+    expect(screen.queryByRole('option', { name: 'HASSAN' })).not.toBeInTheDocument();
+
+    await userEvent.type(screen.getByRole('combobox', { name: /Circle/ }), 'bmaz n');
+    await userEvent.click(await screen.findByRole('option', { name: 'BMAZ NORTH' }));
+    await pickFromCombobox(/Division/, 'peen', 'PEENYA');
+    expect(screen.getByRole('combobox', { name: /Existing station/ })).toBeEnabled();
+  });
+
+  it('fills the location from a chosen station when it is still empty', async () => {
+    renderAt('/initialization');
+    await pickFromCombobox(/Zone/, 'bang', 'BANGALORE');
+    await pickFromCombobox(/Circle/, 'bmaz n', 'BMAZ NORTH');
+    await pickFromCombobox(/Division/, 'peen', 'PEENYA');
+    await pickFromCombobox(/Existing station/, 'abbig', 'ABBIGERE (66 kV)');
+    expect(screen.getByLabelText(/Location/)).toHaveValue('ABBIGERE');
   });
 
   it('updates approval routing from the voltage class', async () => {
@@ -40,20 +62,21 @@ describe('DPR Initialization', () => {
     await userEvent.type(await screen.findByLabelText(/Project name/), '110/11kV Channapatna New S/S');
     await userEvent.type(screen.getByLabelText(/Capacity/), '1x16 MVA');
     await userEvent.type(screen.getByLabelText(/Location/), 'Channapatna');
-    await pickFromCombobox(/Circle/, 'Beng', 'Bengaluru Circle');
-    await pickFromCombobox(/Division/, 'Ali', 'Alipura');
+    await pickFromCombobox(/Zone/, 'bang', 'BANGALORE');
+    await pickFromCombobox(/Circle/, 'bmaz n', 'BMAZ NORTH');
+    await pickFromCombobox(/Division/, 'peen', 'PEENYA');
     await userEvent.click(screen.getByRole('button', { name: 'Initialize DPR' }));
 
     const done = await screen.findByRole('region', { name: 'DPR initialized' });
-    expect(within(done).getByText(`DPR/ALI/${new Date().getFullYear()}/0001`)).toBeInTheDocument();
+    expect(within(done).getByText(`DPR/PEE/${new Date().getFullYear()}/0001`)).toBeInTheDocument();
     expect(within(done).getByRole('link', { name: 'View in reports' })).toHaveAttribute(
       'href',
-      `/reports?q=${encodeURIComponent(`DPR/ALI/${new Date().getFullYear()}/0001`)}`,
+      `/reports?q=${encodeURIComponent(`DPR/PEE/${new Date().getFullYear()}/0001`)}`,
     );
 
-    // "Initialize another" keeps the circle and division.
+    // "Initialize another" keeps the zone, circle and division.
     await userEvent.click(within(done).getByRole('button', { name: 'Initialize another' }));
-    expect(await screen.findByRole('combobox', { name: /Division/ })).toHaveValue('Alipura');
+    expect(await screen.findByRole('combobox', { name: /Division/ })).toHaveValue('PEENYA');
     expect(screen.getByLabelText(/Project name/)).toHaveValue('');
   });
 
