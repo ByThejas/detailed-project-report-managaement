@@ -1,4 +1,4 @@
-import { ALL_DOCUMENTS } from './catalog';
+import { ALL_DOCUMENTS, PREPARATION_INPUTS } from './catalog';
 import { addFiles, canSubmit, countStatuses, missingMandatory, removeFile, setNotApplicable, statusOf, submit } from './state';
 import { EMPTY_DOCUMENTS, type DprDocuments } from './types';
 
@@ -9,15 +9,20 @@ const optional = ALL_DOCUMENTS.find((d) => d.requirement === 'Optional')!;
 const withAllMandatory = () => mandatory.reduce<DprDocuments>((d, s) => addFiles(d, s.key, [file()]), EMPTY_DOCUMENTS);
 
 describe('document state', () => {
-  it('has 23 documents, 6 of them mandatory', () => {
-    expect(ALL_DOCUMENTS).toHaveLength(23);
-    expect(mandatory).toHaveLength(6);
+  it('has 25 documents, 8 of them mandatory', () => {
+    expect(ALL_DOCUMENTS).toHaveLength(25);
+    expect(mandatory).toHaveLength(8);
+  });
+
+  it('knows every preparation input', () => {
+    const keys = ALL_DOCUMENTS.map((d) => d.key);
+    PREPARATION_INPUTS.forEach((k) => expect(keys).toContain(k));
   });
 
   it('starts with everything awaiting and nothing submittable', () => {
-    expect(countStatuses(EMPTY_DOCUMENTS)).toEqual({ uploaded: 0, pending: 0, notReady: 23, notApplicable: 0 });
+    expect(countStatuses(EMPTY_DOCUMENTS)).toEqual({ uploaded: 0, pending: 0, notReady: 25, notApplicable: 0 });
     expect(canSubmit(EMPTY_DOCUMENTS)).toBe(false);
-    expect(missingMandatory(EMPTY_DOCUMENTS)).toHaveLength(6);
+    expect(missingMandatory(EMPTY_DOCUMENTS)).toHaveLength(8);
   });
 
   it('marks a document uploaded when a file is attached, and awaiting again when removed', () => {
@@ -38,7 +43,7 @@ describe('document state', () => {
     expect(canSubmit(ready)).toBe(true);
     const sent = submit(ready, new Date('2026-10-31T10:00:00Z'));
     expect(sent.submittedAt).toBe('2026-10-31T10:00:00.000Z');
-    expect(countStatuses(sent)).toMatchObject({ pending: 6, uploaded: 0 });
+    expect(countStatuses(sent)).toMatchObject({ pending: 8, uploaded: 0 });
     expect(addFiles(sent, optional.key, [file()])).toBe(sent);
     expect(canSubmit(sent)).toBe(false);
   });

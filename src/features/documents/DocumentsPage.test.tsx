@@ -36,7 +36,7 @@ describe('Documents', () => {
     expect(within(summary).getByText('Not ready').parentElement).toHaveTextContent(String(ALL_DOCUMENTS.length));
     expect(screen.getAllByRole('table')).toHaveLength(3);
     const core = screen.getByRole('region', { name: 'Core documents' });
-    expect(within(core).getAllByRole('row')).toHaveLength(13 + 1);
+    expect(within(core).getAllByRole('row')).toHaveLength(15 + 1);
     expect(within(core).getByText('Earth-Mat Design').closest('tr')).toHaveTextContent('R&D');
     expect(screen.getByRole('button', { name: 'Submit to Consultant' })).toBeDisabled();
   });
@@ -74,7 +74,7 @@ describe('Documents', () => {
     await screen.findByRole('region', { name: 'Core documents' });
     const submit = screen.getByRole('button', { name: 'Submit to Consultant' });
     expect(submit).toBeDisabled();
-    expect(screen.getByText(/6 mandatory documents still needed/)).toBeInTheDocument();
+    expect(screen.getByText(/8 mandatory documents still needed/)).toBeInTheDocument();
 
     for (const d of ALL_DOCUMENTS.filter((x) => x.requirement === 'Mandatory')) await attach(d.name);
     expect(submit).toBeEnabled();
@@ -85,6 +85,6 @@ describe('Documents', () => {
     expect(screen.getByRole('button', { name: 'Submit to Consultant' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Add files to TAC' })).toBeDisabled();
     const summary = screen.getByRole('region', { name: 'Document summary' });
-    expect(within(summary).getByText('Pending').parentElement).toHaveTextContent('6');
+    expect(within(summary).getByText('Pending').parentElement).toHaveTextContent('8');
   });
 });

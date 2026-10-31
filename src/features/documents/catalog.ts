@@ -24,12 +24,16 @@ const doc = (name: string, source: string, requirement: Requirement): DocumentSp
   requirement,
 });
 
-/** The documents every DPR needs, copied from the existing Documents screen. */
+/**
+ * The documents every DPR needs, copied from the existing Documents screen, plus TCCM Proposal and
+ * Transformer & Feeder Load Details, which DPR preparation needs for brownfield work.
+ */
 export const DOCUMENT_GROUPS: DocumentGroup[] = [
   {
     key: 'core',
     title: 'Core documents',
     documents: [
+      doc('TCCM Proposal', 'Operations', 'Mandatory'),
       doc('TCCM Proceedings', 'Operations', 'Mandatory'),
       doc('TAC', 'Operations', 'Optional'),
       doc('Land Records', 'Operations', 'Optional'),
@@ -43,6 +47,7 @@ export const DOCUMENT_GROUPS: DocumentGroup[] = [
       doc('Bill of Quantity (Civil)', 'Civil', 'Optional'),
       doc('Earth-Mat Design', 'R&D', 'Mandatory'),
       doc('SCADA & SAS Details', 'SCADA', 'Optional'),
+      doc('Transformer & Feeder Load Details', 'Operations', 'Mandatory'),
     ],
   },
   {
@@ -70,3 +75,17 @@ export const DOCUMENT_GROUPS: DocumentGroup[] = [
 ];
 
 export const ALL_DOCUMENTS: DocumentSpec[] = DOCUMENT_GROUPS.flatMap((g) => g.documents);
+
+/** The ten documents a brownfield DPR is prepared from (DPR Preparation pulls these in). */
+export const PREPARATION_INPUTS = [
+  'tccm-proposal',
+  'tccm-proceedings',
+  'bill-of-quantity-electrical',
+  'bill-of-quantity-civil',
+  'layout-drawing',
+  'single-line-diagram-sld',
+  'grid-map',
+  'earth-mat-design',
+  'scada-sas-details',
+  'transformer-feeder-load-details',
+] as const;

@@ -1,16 +1,17 @@
-import { useMemo, useState } from 'react';
-import { Link, useSearchParams } from 'react-router-dom';
+import { useState } from 'react';
+import { Link } from 'react-router-dom';
 import { CheckCircle2, CircleSlash, Clock, FileStack, FolderOpen, Plus, TriangleAlert } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
-import { Combobox } from '@/components/ui/Combobox';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader } from '@/components/ui/PageHeader';
-import { useDprRegister } from '@/features/reports/api';
+import { ActiveDprPicker } from '@/features/dprs/ActiveDprPicker';
+import { useActiveDpr } from '@/features/dprs/useActiveDpr';
 import { useToast } from '@/lib/toast';
+import { BOQ_DOCUMENTS, useReadBoqFiles, useRemoveBoqRead } from '@/features/boq-import/api';
 import { useDprDocuments, useUpdateDocuments } from './api';
 import { DOCUMENT_GROUPS } from './catalog';
 import { DocumentTable } from './DocumentTable';
-import { addFiles, canSubmit, countStatuses, isLocked, missingMandatory, removeFile, setNotApplicable, submit } from './state';
+import { addFiles, canSubmit, filesOf, countStatuses, isLocked, missingMandatory, removeFile, setNotApplicable, submit } from './state';
 import { EMPTY_DOCUMENTS } from './types';
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -40,24 +41,24 @@ function SummaryStrip({ counts }: { counts: ReturnType<typeof countStatuses> }) 
 }
 
 export function DocumentsPage() {
-  const [params, setParams] = useSearchParams();
-  const dprs = useDprRegister();
+  const { dprs, active, choose: setDpr } = useActiveDpr();
   const toast = useToast();
   const [confirming, setConfirming] = useState(false);
 
-  const dprId = params.get('dpr') ?? '';
-  const options = useMemo(() => (dprs.data ?? []).map((d) => ({ id: d.id, name: `${d.id} — ${d.project}` })), [dprs.data]);
-  const activeId = options.some((o) => o.id === dprId) ? dprId : '';
+  const activeId = active?.id ?? '';
+  const rows = dprs.data ?? [];
 
   const documents = useDprDocuments(activeId);
   const update = useUpdateDocuments(activeId);
+  const readBoq = useReadBoqFiles(activeId);
+  const removeRead = useRemoveBoqRead(activeId);
   const docs = documents.data ?? EMPTY_DOCUMENTS;
   const locked = isLocked(docs);
   const missing = missingMandatory(docs);
 
   const choose = (id: string) => {
     setConfirming(false);
-    setParams(id ? { dpr: id } : {}, { replace: true });
+    setDpr(id);
   };
 
   const attach = (spec: { key: string; name: string }, files: File[]) => {
@@ -69,6 +70,31 @@ export function DocumentsPage() {
     update.mutate((d) => addFiles(d, spec.key, added), {
       onSuccess: () => toast({ title: `${ok.length === 1 ? 'File' : `${ok.length} files`} added`, description: spec.name }),
     });
+    if (BOQ_DOCUMENTS[spec.key]) readBoqFiles(spec.key, ok);
+  };
+
+  // BOQ workbooks are read straight away so DPR Preparation can offer their items for review.
+  const readBoqFiles = (docKey: string, files: File[]) =>
+    readBoq.mutate(
+      { docKey, files },
+      {
+        onSuccess: ({ results, unreadable }) => {
+          for (const r of results) {
+            toast(
+              r.failure
+                ? { title: `Could not read ${r.fileName}`, description: r.failure, tone: 'error' }
+                : { title: `Read ${r.items.length} items from ${r.fileName}`, description: 'Review and import them in DPR Preparation.' },
+            );
+          }
+          if (unreadable.length) toast({ title: 'Attached, not read', description: `Quantities are read from .xlsx files only: ${unreadable.join(', ')}.`, tone: 'info' });
+        },
+      },
+    );
+
+  const remove = (spec: { key: string }, index: number) => {
+    const name = filesOf(docs, spec.key)[index]?.name;
+    update.mutate((d) => removeFile(d, spec.key, index));
+    if (name && BOQ_DOCUMENTS[spec.key] && !filesOf(docs, spec.key).some((f, i) => i !== index && f.name === name)) removeRead.mutate({ docKey: spec.key, fileName: name });
   };
 
   const send = () => {
@@ -83,7 +109,7 @@ export function DocumentsPage() {
   let body;
   if (dprs.isPending) {
     body = <div className="h-24 animate-pulse rounded-lg bg-gray-100" aria-label="Loading DPRs" />;
-  } else if (options.length === 0) {
+  } else if (rows.length === 0) {
     body = (
       <Card>
         <EmptyState
@@ -120,7 +146,7 @@ export function DocumentsPage() {
             group={group}
             docs={docs}
             onAdd={attach}
-            onRemove={(spec, i) => update.mutate((d) => removeFile(d, spec.key, i))}
+            onRemove={remove}
             onNotApplicable={(spec, value) => update.mutate((d) => setNotApplicable(d, spec, value))}
           />
         ))}
@@ -157,19 +183,7 @@ export function DocumentsPage() {
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader title="Documents" description="Attach the documents each DPR needs, then send them to the consultant." />
       <div className="space-y-4">
-        <div>
-          <label htmlFor="active-dpr" className="label-muted mb-1.5 block">
-            Active DPR
-          </label>
-          <Combobox
-            id="active-dpr"
-            options={options}
-            value={activeId}
-            onChange={choose}
-            placeholder="Search by DPR ID or project name…"
-            disabled={options.length === 0}
-          />
-        </div>
+        <ActiveDprPicker rows={rows} value={activeId} onChange={choose} />
         {body}
       </div>
     </div>

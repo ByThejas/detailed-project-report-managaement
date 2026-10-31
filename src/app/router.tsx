@@ -4,6 +4,7 @@ import { DashboardPage } from '@/features/dashboard/DashboardPage';
 import { InitializationPage } from '@/features/initialization/InitializationPage';
 import { ReportsPage } from '@/features/reports/ReportsPage';
 import { DocumentsPage } from '@/features/documents/DocumentsPage';
+import { DprPreparationPage } from '@/features/preparation/DprPreparationPage';
 import { NotFoundPage } from '@/pages/NotFoundPage';
 
 export const routes = [
@@ -15,6 +16,7 @@ export const routes = [
       { path: 'initialization', element: <InitializationPage /> },
       { path: 'reports', element: <ReportsPage /> },
       { path: 'documents', element: <DocumentsPage /> },
+      { path: 'preparation', element: <DprPreparationPage /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },
