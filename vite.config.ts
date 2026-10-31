@@ -1,0 +1,20 @@
+/// <reference types="vitest" />
+import { defineConfig } from 'vite';
+import react from '@vitejs/plugin-react';
+import { fileURLToPath, URL } from 'node:url';
+
+export default defineConfig({
+  plugins: [react()],
+  resolve: {
+    alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
+  },
+  server: { port: 5173 },
+  // ExcelJS (~940 kB) is loaded on demand only when a report is downloaded.
+  build: { chunkSizeWarningLimit: 1000 },
+  test: {
+    globals: true,
+    environment: 'jsdom',
+    setupFiles: ['./src/test/setup.ts'],
+    css: false,
+  },
+});

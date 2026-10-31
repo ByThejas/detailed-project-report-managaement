@@ -1,0 +1,226 @@
+import { useState, type ReactNode } from 'react';
+import { Controller, useForm } from 'react-hook-form';
+import { zodResolver } from '@hookform/resolvers/zod';
+import { Link } from 'react-router-dom';
+import { AlertTriangle, CheckCircle2, Loader2 } from 'lucide-react';
+import { PageHeader } from '@/components/ui/PageHeader';
+import { Card, CardHeader } from '@/components/ui/Card';
+import { Field, Select, TextInput } from '@/components/ui/Field';
+import { Combobox } from '@/components/ui/Combobox';
+import { useToast } from '@/lib/toast';
+import { useCircles, useCreateDpr, useDivisions } from './api';
+import { approvalRouteFor } from './routing';
+import { newDprSchema, type NewDprForm } from './schema';
+import { PROJECT_TYPES, VOLTAGE_CLASSES, type CreatedDpr } from './types';
+
+const DEFAULTS: NewDprForm = {
+  projectName: '',
+  projectType: 'Greenfield',
+  voltageClass: '66 kV',
+  capacity: '',
+  location: '',
+  circleId: '',
+  divisionId: '',
+};
+
+function Section({ title, description, children }: { title: string; description: string; children: ReactNode }) {
+  return (
+    <section className="grid grid-cols-1 gap-x-8 gap-y-4 border-b border-gray-200 px-4 py-5 last:border-b-0 sm:px-6 md:grid-cols-[180px_1fr]">
+      <div>
+        <h2 className="text-[13px] font-semibold text-gray-900">{title}</h2>
+        <p className="mt-0.5 text-xs text-gray-500">{description}</p>
+      </div>
+      <div className="space-y-4">{children}</div>
+    </section>
+  );
+}
+
+function SuccessPanel({ dpr, onAnother }: { dpr: CreatedDpr; onAnother: () => void }) {
+  return (
+    <Card role="region" aria-labelledby="created-title" className="mx-auto max-w-lg px-6 py-10 text-center">
+      <CheckCircle2 className="mx-auto h-6 w-6 text-emerald-600" strokeWidth={1.75} aria-hidden />
+      <h2 id="created-title" className="mt-3 text-base font-semibold text-gray-900">
+        DPR initialized
+      </h2>
+      <p className="mt-1 text-[13px] text-gray-500">
+        <span className="text-gray-900">{dpr.projectName}</span> is now in the Data Pending stage.
+      </p>
+      <dl className="mx-auto mt-5 max-w-xs divide-y divide-gray-100 rounded-md border border-gray-200 text-left text-[13px]">
+        <div className="flex justify-between gap-4 px-3 py-2">
+          <dt className="text-gray-500">DPR ID</dt>
+          <dd className="num text-gray-900">{dpr.id}</dd>
+        </div>
+        <div className="flex justify-between gap-4 px-3 py-2">
+          <dt className="text-gray-500">Final approver</dt>
+          <dd className="text-right text-gray-900">{dpr.finalApprover}</dd>
+        </div>
+      </dl>
+      <div className="mt-6 flex justify-center gap-2">
+        <button type="button" className="btn-secondary" onClick={onAnother}>
+          Initialize another
+        </button>
+        <Link to={`/reports?q=${encodeURIComponent(dpr.id)}`} className="btn-primary">
+          View in reports
+        </Link>
+      </div>
+    </Card>
+  );
+}
+
+export function InitializationPage() {
+  const [created, setCreated] = useState<CreatedDpr | null>(null);
+  const toast = useToast();
+  const {
+    register,
+    control,
+    handleSubmit,
+    watch,
+    setValue,
+    reset,
+    formState: { errors },
+  } = useForm<NewDprForm>({ resolver: zodResolver(newDprSchema), defaultValues: DEFAULTS, mode: 'onTouched' });
+
+  const circleId = watch('circleId');
+  const voltageClass = watch('voltageClass');
+  const route = approvalRouteFor(voltageClass);
+
+  const circles = useCircles();
+  const divisions = useDivisions(circleId || undefined);
+  const create = useCreateDpr();
+
+  const onSubmit = handleSubmit(async (values) => {
+    try {
+      const dpr = await create.mutateAsync(values);
+      setCreated(dpr);
+      toast({ title: 'DPR initialized', description: dpr.id });
+    } catch {
+      toast({ title: 'Could not create the DPR', description: 'Please try again.', tone: 'error' });
+    }
+  });
+
+  // Same office is the common case for a batch of DPRs, so keep circle and division.
+  const another = () => {
+    reset({ ...DEFAULTS, circleId: created?.circleId ?? '', divisionId: created?.divisionId ?? '' });
+    create.reset();
+    setCreated(null);
+  };
+
+  const err = (id: keyof NewDprForm) => errors[id]?.message;
+
+  return (
+    <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
+      <PageHeader title="DPR Initialization" description="Register a new DPR. Approval routing is set from the voltage class." />
+
+      {created ? (
+        <SuccessPanel dpr={created} onAnother={another} />
+      ) : (
+        <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[1fr_300px]">
+          <form onSubmit={onSubmit} noValidate aria-label="New DPR">
+            <Card>
+              <Section title="Project" description="What is being built.">
+                <Field id="projectName" label="Project name" required error={err('projectName')}>
+                  <TextInput id="projectName" placeholder="110/11kV Channapatna New S/S" invalid={!!errors.projectName} {...register('projectName')} />
+                </Field>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                  <Field id="projectType" label="Project type" required>
+                    <Select id="projectType" options={PROJECT_TYPES} {...register('projectType')} />
+                  </Field>
+                  <Field id="voltageClass" label="Voltage class" required>
+                    <Select id="voltageClass" options={VOLTAGE_CLASSES} {...register('voltageClass')} />
+                  </Field>
+                  <Field id="capacity" label="Capacity" required error={err('capacity')} hint="Units × MVA">
+                    <TextInput id="capacity" placeholder="1x16 MVA" invalid={!!errors.capacity} {...register('capacity')} />
+                  </Field>
+                </div>
+              </Section>
+
+              <Section title="Location" description="Where it is and which office owns it.">
+                <Field id="location" label="Location / place" required error={err('location')}>
+                  <TextInput id="location" placeholder="Channapatna" invalid={!!errors.location} {...register('location')} />
+                </Field>
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <Field id="circleId" label="Circle" required error={err('circleId')}>
+                    <Controller
+                      control={control}
+                      name="circleId"
+                      render={({ field }) => (
+                        <Combobox
+                          id="circleId"
+                          options={circles.data ?? []}
+                          value={field.value}
+                          onChange={(v) => {
+                            field.onChange(v);
+                            setValue('divisionId', '');
+                          }}
+                          onBlur={field.onBlur}
+                          placeholder={circles.isPending ? 'Loading…' : 'Search circles'}
+                          invalid={!!errors.circleId}
+                        />
+                      )}
+                    />
+                  </Field>
+                  <Field id="divisionId" label="Division" required error={err('divisionId')} hint={circleId ? undefined : 'Choose a circle first'}>
+                    <Controller
+                      control={control}
+                      name="divisionId"
+                      render={({ field }) => (
+                        <Combobox
+                          id="divisionId"
+                          options={divisions.data ?? []}
+                          value={field.value}
+                          onChange={field.onChange}
+                          onBlur={field.onBlur}
+                          disabled={!circleId}
+                          placeholder="Search divisions"
+                          invalid={!!errors.divisionId}
+                          describedBy={circleId ? undefined : 'divisionId-hint'}
+                        />
+                      )}
+                    />
+                  </Field>
+                </div>
+              </Section>
+
+              <div className="flex flex-col-reverse gap-2 rounded-b-lg border-t border-gray-200 bg-gray-50 px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
+                <button type="button" className="btn-secondary" onClick={() => reset(DEFAULTS)}>
+                  Clear
+                </button>
+                <button type="submit" className="btn-primary" disabled={create.isPending}>
+                  {create.isPending && <Loader2 className="h-4 w-4 animate-spin" aria-hidden />}
+                  Initialize DPR
+                </button>
+              </div>
+            </Card>
+          </form>
+
+          <aside aria-label="Approval routing" className="lg:sticky lg:top-6">
+            <Card>
+              <CardHeader title="Approval routing" subtitle="Set from the voltage class" />
+              <dl className="divide-y divide-gray-100 px-4 text-[13px]">
+                <div className="py-2.5">
+                  <dt className="text-xs text-gray-500">Final approver</dt>
+                  <dd className="mt-0.5 font-medium text-gray-900" data-testid="final-approver">
+                    {route.finalApprover ?? 'To be confirmed'}
+                  </dd>
+                </div>
+                <div className="py-2.5">
+                  <dt className="text-xs text-gray-500">Voltage group</dt>
+                  <dd className="mt-0.5 font-medium text-gray-900" data-testid="voltage-group">
+                    {route.voltageGroup}
+                  </dd>
+                </div>
+              </dl>
+              {route.finalApprover === null && (
+                <p className="flex gap-2 border-t border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-800">
+                  <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" aria-hidden />
+                  The approver for {voltageClass} is not confirmed yet. The DPR can still be created.
+                </p>
+              )}
+              <p className="border-t border-gray-100 px-4 py-2.5 text-xs text-gray-500">New DPRs start in the Data Pending stage.</p>
+            </Card>
+          </aside>
+        </div>
+      )}
+    </div>
+  );
+}
