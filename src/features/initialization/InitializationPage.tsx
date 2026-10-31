@@ -12,13 +12,14 @@ import { useCircles, useDivisions, useStations, useZones } from '@/features/loca
 import { useCreateDpr } from './api';
 import { approvalRouteFor } from './routing';
 import { newDprSchema, type NewDprForm } from './schema';
-import { PROJECT_TYPES, VOLTAGE_CLASSES, type CreatedDpr } from './types';
+import { CAPACITY_MVA, CAPACITY_UNITS, formatCapacity, PROJECT_TYPES, VOLTAGE_CLASSES, type CreatedDpr } from './types';
 
 const DEFAULTS: NewDprForm = {
   projectName: '',
   projectType: 'Greenfield',
   voltageClass: '66 kV',
-  capacity: '',
+  capacityUnits: '' as NewDprForm['capacityUnits'],
+  capacityMva: '' as NewDprForm['capacityMva'],
   location: '',
   zoneId: '',
   circleId: '',
@@ -101,7 +102,8 @@ export function InitializationPage() {
 
   const onSubmit = handleSubmit(async (values) => {
     try {
-      const dpr = await create.mutateAsync(values);
+      const { capacityUnits, capacityMva, ...rest } = values;
+      const dpr = await create.mutateAsync({ ...rest, capacity: formatCapacity(capacityUnits, capacityMva) });
       setCreated(dpr);
       toast({ title: 'DPR initialized', description: dpr.id });
     } catch {
@@ -137,16 +139,39 @@ export function InitializationPage() {
                 <Field id="projectName" label="Project name" required error={err('projectName')}>
                   <TextInput id="projectName" placeholder="110/11kV Channapatna New S/S" invalid={!!errors.projectName} {...register('projectName')} />
                 </Field>
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                   <Field id="projectType" label="Project type" required>
                     <Select id="projectType" options={PROJECT_TYPES} {...register('projectType')} />
                   </Field>
                   <Field id="voltageClass" label="Voltage class" required>
                     <Select id="voltageClass" options={VOLTAGE_CLASSES} {...register('voltageClass')} />
                   </Field>
-                  <Field id="capacity" label="Capacity" required error={err('capacity')} hint="Units × MVA">
-                    <TextInput id="capacity" placeholder="1x16 MVA" invalid={!!errors.capacity} {...register('capacity')} />
+                  <div className="sm:col-span-2 sm:max-w-sm">
+                  <Field id="capacityUnits" label="Capacity" required error={err('capacityUnits') ?? err('capacityMva')}>
+                    <div className="flex items-center gap-2">
+                      <Select
+                        id="capacityUnits"
+                        aria-label="Number of units"
+                        placeholder="Units"
+                        options={CAPACITY_UNITS}
+                        invalid={!!errors.capacityUnits}
+                        {...register('capacityUnits')}
+                      />
+                      <span className="text-gray-400" aria-hidden>
+                        ×
+                      </span>
+                      <Select
+                        id="capacityMva"
+                        aria-label="MVA rating"
+                        placeholder="Rating"
+                        options={CAPACITY_MVA}
+                        invalid={!!errors.capacityMva}
+                        {...register('capacityMva')}
+                      />
+                      <span className="text-[13px] font-medium text-gray-700">MVA</span>
+                    </div>
                   </Field>
+                  </div>
                 </div>
               </Section>
 

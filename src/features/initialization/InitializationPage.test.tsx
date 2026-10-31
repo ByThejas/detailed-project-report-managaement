@@ -14,7 +14,7 @@ describe('DPR Initialization', () => {
     renderAt('/initialization');
     await userEvent.click(await screen.findByRole('button', { name: 'Initialize DPR' }));
     expect(await screen.findByText(/Enter the project name/)).toBeInTheDocument();
-    expect(screen.getByText('Use the form 1x16 MVA')).toBeInTheDocument();
+    expect(screen.getByText('Choose the number of units')).toBeInTheDocument();
     expect(screen.getByText('Enter the location or place')).toBeInTheDocument();
     expect(screen.getByText('Choose a zone')).toBeInTheDocument();
     expect(screen.getByText('Choose a circle')).toBeInTheDocument();
@@ -60,7 +60,8 @@ describe('DPR Initialization', () => {
   it('creates a DPR when the form is valid', async () => {
     renderAt('/initialization');
     await userEvent.type(await screen.findByLabelText(/Project name/), '110/11kV Channapatna New S/S');
-    await userEvent.type(screen.getByLabelText(/Capacity/), '1x16 MVA');
+    await userEvent.selectOptions(screen.getByLabelText('Number of units'), '2');
+    await userEvent.selectOptions(screen.getByLabelText('MVA rating'), '31.5');
     await userEvent.type(screen.getByLabelText(/Location/), 'Channapatna');
     await pickFromCombobox(/Zone/, 'bang', 'BANGALORE');
     await pickFromCombobox(/Circle/, 'bmaz n', 'BMAZ NORTH');
@@ -73,6 +74,8 @@ describe('DPR Initialization', () => {
       'href',
       `/reports?q=${encodeURIComponent(`DPR/PEE/${new Date().getFullYear()}/0001`)}`,
     );
+
+    expect(localStorage.getItem('dpr-manager.sample-dprs.v1')).toContain('2x31.5 MVA');
 
     // "Initialize another" keeps the zone, circle and division.
     await userEvent.click(within(done).getByRole('button', { name: 'Initialize another' }));

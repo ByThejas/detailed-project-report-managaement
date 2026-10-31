@@ -4,6 +4,12 @@ export type ProjectType = (typeof PROJECT_TYPES)[number];
 export const VOLTAGE_CLASSES = ['66 kV', '110 kV', '220 kV', '400 kV'] as const;
 export type VoltageClass = (typeof VOLTAGE_CLASSES)[number];
 
+/** Transformer count and rating, chosen from lists so nobody types them. */
+export const CAPACITY_UNITS = ['1', '2', '3', '4'] as const;
+export const CAPACITY_MVA = ['5', '8', '10', '12.5', '16', '20', '31.5', '50', '63', '100', '160', '315', '500'] as const;
+
+export const formatCapacity = (units: string, mva: string) => `${units}x${mva} MVA`;
+
 export interface NewDprRequest {
   projectName: string;
   projectType: ProjectType;
