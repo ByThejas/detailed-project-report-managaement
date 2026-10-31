@@ -130,3 +130,11 @@ types and tests.
 2. Login and roles (Admin, Consultant, Reviewer).
 3. The rest of the DPR Initialization form (if any).
 4. DPR preparation: narrative builder and the cost estimate (BCR, IRR, payback).
+
+## Deploying to Vercel
+
+Import the folder that contains `package.json` as the project root. `vercel.json` sets the
+build (`npm run build`), the output folder (`dist`) and a rewrite that sends every route
+(`/dashboard`, `/documents`, a refreshed page, a shared filtered link) to `index.html`, so
+the React router can handle it. Without that rewrite Vercel answers 404 NOT_FOUND on any
+URL other than `/`.
