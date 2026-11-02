@@ -35,6 +35,8 @@ export interface ParsedItem {
   supplyRate: number;
   erectionRate: number;
   testingRate: number;
+  /** Schedule-of-rates reference written next to the item, e.g. "(V1/Pg15/2.2.3)". */
+  srRef?: string;
   issues: Issue[];
 }
 
@@ -66,7 +68,44 @@ export interface SheetSummary {
   columns: Partial<Record<ColumnRole, string>>;
   /** Abstract/summary sheets repeat other sheets, so they start excluded. */
   includedByDefault: boolean;
+  /** What the sheet is, from its name: a BOQ table, an abstract, or an annexure that feeds quantities to a BOQ sheet. */
+  kind?: 'boq' | 'abstract' | 'annexure';
+  /** BOQ part the sheet's items go to, from its name (e.g. "Line Civil" → line civil). Falls back to the document's part. */
+  section?: EstimateSection;
   note?: string;
+}
+
+/** A "Miscellaneous" row: a lump amount that tops a sheet up to its stated total. */
+export interface MiscRow {
+  sheet: string;
+  row: number;
+  label: string;
+  column: 'supply' | 'erection' | 'testing';
+  amount: number;
+  /** The total stated on the row after it (sub-total + misc), when there is one. */
+  statedTotal?: number;
+}
+
+/** The figures an abstract sheet in the workbook states, Rs. Used to cross-check and to carry over percentages and charges. */
+export interface StatedAbstract {
+  sheet: string;
+  /** Which abstract of the estimate this sheet is, guessed from its title. */
+  part: 'I' | 'II' | 'line';
+  title: string;
+  material?: number;
+  labour?: number;
+  civil?: number;
+  basic?: number;
+  loading?: number;
+  gst?: number;
+  statutory?: number;
+  forest?: number;
+  land?: number;
+  total?: number;
+  /** loading ÷ basic, %, rounded to 2 decimals. */
+  areaLoadingPct?: number;
+  /** gst ÷ (basic + loading), %, rounded to 2 decimals. */
+  gstPct?: number;
 }
 
 export type ColumnRole =
@@ -79,7 +118,8 @@ export type ColumnRole =
   | 'testingRate'
   | 'supplyAmount'
   | 'erectionAmount'
-  | 'testingAmount';
+  | 'testingAmount'
+  | 'srRef';
 
 export interface BoqReadResult {
   fileName: string;
@@ -89,6 +129,10 @@ export interface BoqReadResult {
   items: ParsedItem[];
   skipped: SkippedRow[];
   totals: TotalCheck[];
+  /** Miscellaneous / rounding rows found under the BOQ tables. Older saved reads may not have it. */
+  misc?: MiscRow[];
+  /** Abstract sheets found in the workbook. Older saved reads may not have it. */
+  abstracts?: StatedAbstract[];
   /** Set when the file could not be read at all. */
   failure?: string;
 }

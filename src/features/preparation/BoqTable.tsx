@@ -2,10 +2,10 @@ import type { CSSProperties } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { formatNumber } from '@/lib/format';
-import { lineAmounts, sectionTotals } from './calc';
+import { SECTION_KEYS, lineAmounts, sectionTotals, type TotalKey } from './calc';
 import { NumberInput } from './NumberInput';
 import { newLine } from './template';
-import type { Estimate, EstimateLine, EstimateSection } from './types';
+import { isMultiRate, type Estimate, type EstimateLine, type EstimateSection } from './types';
 
 const rupees = (n: number) => formatNumber(Math.round(n * 100) / 100);
 
@@ -15,25 +15,30 @@ interface BoqTableProps {
   onChange: (e: Estimate) => void;
 }
 
-const META = {
-  electrical: { title: 'Electrical BOQ (Part A)', subtitle: 'Supply of materials, erection, testing & commissioning · Rs', prefix: 'A' },
-  civil: { title: 'Civil BOQ (Part B)', subtitle: 'Civil works · Rs', prefix: 'B' },
-  dismantling: { title: 'Dismantling (Abstract-II)', subtitle: 'Decommissioning of the equipment being replaced · Rs', prefix: 'D' },
-} as const;
+const META: Record<EstimateSection, { title: string; subtitle: string; prefix: string; misc: string; miscLabel: string }> = {
+  electrical: { title: 'Electrical BOQ (Part A)', subtitle: 'Supply of materials, erection, testing & commissioning · Rs', prefix: 'A', misc: 'Miscellaneous and unforeseen', miscLabel: 'Miscellaneous' },
+  civil: { title: 'Civil BOQ (Part B)', subtitle: 'Civil works · Rs', prefix: 'B', misc: 'Rounding off', miscLabel: 'Civil rounding off' },
+  dismantling: { title: 'Dismantling (Abstract-II)', subtitle: 'Decommissioning of the equipment being replaced · Rs', prefix: 'D', misc: 'Miscellaneous', miscLabel: 'Dismantling miscellaneous' },
+  line: { title: 'Line works: supply & erection', subtitle: 'Line materials and labour · Rs', prefix: 'L', misc: 'Miscellaneous', miscLabel: 'Line miscellaneous' },
+  lineCivil: { title: 'Line works: civil', subtitle: 'Tower foundations and other line civil works · Rs', prefix: 'C', misc: 'Miscellaneous and unforeseen', miscLabel: 'Line civil miscellaneous' },
+};
 
 export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
   const lines = estimate.lines.filter((l) => l.section === section);
   const { subTotal, total } = sectionTotals(estimate);
-  const electrical = section === 'electrical';
+  const electrical = isMultiRate(section);
   const meta = META[section];
-  // Civil and dismantling have a single rate; their totals and misc live under the section's own key.
-  const single = section === 'electrical' ? 'civil' : section;
+  // Where this section's amounts are added up (one key for single-rate sections).
+  const keys = SECTION_KEYS[section];
+  const single = keys.supply;
+  const erectionKey: TotalKey = keys.erection ?? single;
+  const testingKey: TotalKey = keys.testing ?? single;
 
   const patch = (id: string, change: Partial<EstimateLine>) =>
     onChange({ ...estimate, lines: estimate.lines.map((l) => (l.id === id ? { ...l, ...change } : l)) });
   const remove = (id: string) => onChange({ ...estimate, lines: estimate.lines.filter((l) => l.id !== id) });
   const add = () => onChange({ ...estimate, lines: [...estimate.lines, newLine(section, `${meta.prefix}${lines.length + 1}`)] });
-  const setMisc = (key: keyof Estimate['misc'], n: number) => onChange({ ...estimate, misc: { ...estimate.misc, [key]: n } });
+  const setMisc = (key: TotalKey, n: number) => onChange({ ...estimate, misc: { ...estimate.misc, [key]: n } });
 
   const th = 'px-2 py-2 font-medium';
   const titleId = `${section}-boq-title`;
@@ -155,11 +160,11 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
               {electrical ? (
                 <>
                   <td />
-                  <td className="num px-2 py-2 text-right">{rupees(subTotal.supply)}</td>
+                  <td className="num px-2 py-2 text-right">{rupees(subTotal[single])}</td>
                   <td />
-                  <td className="num px-2 py-2 text-right">{rupees(subTotal.erection)}</td>
+                  <td className="num px-2 py-2 text-right">{rupees(subTotal[erectionKey])}</td>
                   <td />
-                  <td className="num px-2 py-2 text-right">{rupees(subTotal.testing)}</td>
+                  <td className="num px-2 py-2 text-right">{rupees(subTotal[testingKey])}</td>
                 </>
               ) : (
                 <>
@@ -171,21 +176,21 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
             </tr>
             <tr>
               <td colSpan={4} className="py-1 pl-4 pr-2 text-right text-gray-500">
-                {electrical ? 'Miscellaneous and unforeseen' : section === 'civil' ? 'Rounding off' : 'Miscellaneous'}
+                {meta.misc}
               </td>
               {electrical ? (
                 <>
                   <td />
                   <td className="px-2 py-1 text-right">
-                    <NumberInput label="Miscellaneous supply amount" value={estimate.misc.supply} onChange={(n) => setMisc('supply', n)} className="w-28" />
+                    <NumberInput label={`${meta.miscLabel} supply amount`} value={estimate.misc[single] ?? 0} onChange={(n) => setMisc(single, n)} className="w-28" />
                   </td>
                   <td />
                   <td className="px-2 py-1 text-right">
-                    <NumberInput label="Miscellaneous erection amount" value={estimate.misc.erection} onChange={(n) => setMisc('erection', n)} />
+                    <NumberInput label={`${meta.miscLabel} erection amount`} value={estimate.misc[erectionKey] ?? 0} onChange={(n) => setMisc(erectionKey, n)} />
                   </td>
                   <td />
                   <td className="px-2 py-1 text-right">
-                    <NumberInput label="Miscellaneous testing amount" value={estimate.misc.testing} onChange={(n) => setMisc('testing', n)} />
+                    <NumberInput label={`${meta.miscLabel} testing amount`} value={estimate.misc[testingKey] ?? 0} onChange={(n) => setMisc(testingKey, n)} />
                   </td>
                 </>
               ) : (
@@ -193,7 +198,7 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
                   <td />
                   <td className="px-2 py-1 text-right">
                     <NumberInput
-                      label={section === 'civil' ? 'Civil rounding off' : 'Dismantling miscellaneous'}
+                      label={meta.miscLabel}
                       value={estimate.misc[single] ?? 0}
                       onChange={(n) => setMisc(single, n)}
                       className="w-28"
@@ -208,11 +213,11 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
               {electrical ? (
                 <>
                   <td />
-                  <td className="num px-2 py-2 text-right">{rupees(total.supply)}</td>
+                  <td className="num px-2 py-2 text-right">{rupees(total[single])}</td>
                   <td />
-                  <td className="num px-2 py-2 text-right">{rupees(total.erection)}</td>
+                  <td className="num px-2 py-2 text-right">{rupees(total[erectionKey])}</td>
                   <td />
-                  <td className="num px-2 py-2 text-right">{rupees(total.testing)}</td>
+                  <td className="num px-2 py-2 text-right">{rupees(total[testingKey])}</td>
                 </>
               ) : (
                 <>
