@@ -14,11 +14,13 @@ export interface DocumentGroup {
   documents: DocumentSpec[];
 }
 
-const doc = (name: string, source: string, requirement: Requirement): DocumentSpec => ({
-  key: name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, ''),
+const doc = (name: string, source: string, requirement: Requirement, key?: string): DocumentSpec => ({
+  key:
+    key ??
+    name
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, '-')
+      .replace(/^-|-$/g, ''),
   name,
   source,
   requirement,
@@ -33,7 +35,7 @@ export const DOCUMENT_GROUPS: DocumentGroup[] = [
     key: 'core',
     title: 'Core documents',
     documents: [
-      doc('TCCM Proposal', 'Operations', 'Mandatory'),
+      doc('TCCM Proposal', 'Operations', 'Optional'),
       doc('TCCM Proceedings', 'Operations', 'Mandatory'),
       doc('TAC', 'Operations', 'Optional'),
       doc('Land Records', 'Operations', 'Optional'),
@@ -43,8 +45,9 @@ export const DOCUMENT_GROUPS: DocumentGroup[] = [
       doc('Finished Ground Level (FGL)', 'Operations', 'Optional'),
       doc('Survey Report', 'Operations', 'Optional'),
       doc('Grid Map', 'P&C', 'Mandatory'),
-      doc('Bill of Quantity (Electrical)', 'P&C', 'Mandatory'),
-      doc('Bill of Quantity (Civil)', 'Civil', 'Optional'),
+      // One BOQ workbook holds both electrical and civil sheets. It keeps the old "electrical" key so
+      // files already attached under that name still count.
+      doc('Bill of Quantity (BOQ)', 'P&C', 'Mandatory', 'bill-of-quantity-electrical'),
       doc('Earth-Mat Design', 'R&D', 'Mandatory'),
       doc('SCADA & SAS Details', 'SCADA', 'Optional'),
       doc('Transformer & Feeder Load Details', 'Operations', 'Mandatory'),
@@ -76,12 +79,11 @@ export const DOCUMENT_GROUPS: DocumentGroup[] = [
 
 export const ALL_DOCUMENTS: DocumentSpec[] = DOCUMENT_GROUPS.flatMap((g) => g.documents);
 
-/** The ten documents a brownfield DPR is prepared from (DPR Preparation pulls these in). */
+/** The nine documents a brownfield DPR is prepared from (DPR Preparation pulls these in). */
 export const PREPARATION_INPUTS = [
   'tccm-proposal',
   'tccm-proceedings',
   'bill-of-quantity-electrical',
-  'bill-of-quantity-civil',
   'layout-drawing',
   'single-line-diagram-sld',
   'grid-map',

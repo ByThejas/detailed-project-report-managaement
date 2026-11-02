@@ -12,6 +12,9 @@ const TRANSFORMER_RATES: Record<string, { supply: number; erection: number; test
   '66/20': { supply: 31_247_000, erection: 215_836.4, testing: 71_159 },
 };
 
+/** Marks lines that are still the sample's, so the DPR is not finished with sample quantities and rates. */
+export const TEMPLATE_SOURCE = 'Kogali sample template';
+
 let seq = 0;
 const id = () => `l${Date.now().toString(36)}${(seq++).toString(36)}`;
 
@@ -107,7 +110,7 @@ export function buildTemplate(dpr: { capacity: string; voltage: string; stream?:
   if (!greenfield) lines.push(...dismantlingLines(n, lv));
 
   return {
-    lines: greenfield ? [] : lines,
+    lines: greenfield ? [] : lines.map((l) => ({ ...l, source: TEMPLATE_SOURCE })),
     misc: { supply: 0, erection: 0, testing: 0, civil: 0, dismantling: 0 },
     areaLoadingPct: 5,
     gstPct: 18,

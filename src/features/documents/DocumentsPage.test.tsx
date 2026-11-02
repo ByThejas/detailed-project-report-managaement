@@ -44,6 +44,9 @@ describe('Documents', () => {
   it('opens the DPR named in the URL and filters a table', async () => {
     seed([row()]);
     renderAt('/documents?dpr=DPR%2FPEE%2F2026%2F0001');
+    const header = await screen.findByRole('region', { name: 'Selected DPR' });
+    expect(within(header).getByRole('heading', { name: '110/11kV Channapatna New S/S' })).toBeInTheDocument();
+    for (const fact of ['DPR/PEE/2026/0001', 'Greenfield', '110 kV', '1x16 MVA', 'PEENYA', 'CGM (Tech) Corporate Office']) expect(within(header).getByText(fact)).toBeInTheDocument();
     const statutory = await screen.findByRole('region', { name: 'Statutory documents' });
     await userEvent.type(within(statutory).getByRole('searchbox'), 'railway');
     expect(within(statutory).getAllByRole('row')).toHaveLength(2);

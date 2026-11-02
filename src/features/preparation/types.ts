@@ -36,6 +36,8 @@ export interface EstimateLine {
   testingRate: number;
   /** Where the line came from when imported, e.g. "boq.xlsx · Sheet1 row 12". */
   source?: string;
+  /** Schedule-of-rates item the rates were taken from, e.g. "SoR 2023-24 · By code 1.10 · p25". */
+  rateRef?: string;
 }
 
 export interface Estimate {

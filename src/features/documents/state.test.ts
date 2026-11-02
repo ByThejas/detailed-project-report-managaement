@@ -9,9 +9,9 @@ const optional = ALL_DOCUMENTS.find((d) => d.requirement === 'Optional')!;
 const withAllMandatory = () => mandatory.reduce<DprDocuments>((d, s) => addFiles(d, s.key, [file()]), EMPTY_DOCUMENTS);
 
 describe('document state', () => {
-  it('has 25 documents, 8 of them mandatory', () => {
-    expect(ALL_DOCUMENTS).toHaveLength(25);
-    expect(mandatory).toHaveLength(8);
+  it('has 24 documents, 7 of them mandatory', () => {
+    expect(ALL_DOCUMENTS).toHaveLength(24);
+    expect(mandatory).toHaveLength(7);
   });
 
   it('knows every preparation input', () => {
@@ -20,9 +20,9 @@ describe('document state', () => {
   });
 
   it('starts with everything awaiting and nothing submittable', () => {
-    expect(countStatuses(EMPTY_DOCUMENTS)).toEqual({ uploaded: 0, pending: 0, notReady: 25, notApplicable: 0 });
+    expect(countStatuses(EMPTY_DOCUMENTS)).toEqual({ uploaded: 0, pending: 0, notReady: 24, notApplicable: 0 });
     expect(canSubmit(EMPTY_DOCUMENTS)).toBe(false);
-    expect(missingMandatory(EMPTY_DOCUMENTS)).toHaveLength(8);
+    expect(missingMandatory(EMPTY_DOCUMENTS)).toHaveLength(7);
   });
 
   it('marks a document uploaded when a file is attached, and awaiting again when removed', () => {
@@ -43,7 +43,7 @@ describe('document state', () => {
     expect(canSubmit(ready)).toBe(true);
     const sent = submit(ready, new Date('2026-10-31T10:00:00Z'));
     expect(sent.submittedAt).toBe('2026-10-31T10:00:00.000Z');
-    expect(countStatuses(sent)).toMatchObject({ pending: 8, uploaded: 0 });
+    expect(countStatuses(sent)).toMatchObject({ pending: 7, uploaded: 0 });
     expect(addFiles(sent, optional.key, [file()])).toBe(sent);
     expect(canSubmit(sent)).toBe(false);
   });

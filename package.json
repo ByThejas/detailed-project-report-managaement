@@ -9,6 +9,7 @@
     "preview": "vite preview",
     "lint": "eslint .",
     "generate:locations": "node scripts/generate-locations.mjs",
+    "generate:rates": "node scripts/generate-rates.mjs",
     "typecheck": "tsc -b --noEmit",
     "test": "vitest run",
     "test:watch": "vitest"

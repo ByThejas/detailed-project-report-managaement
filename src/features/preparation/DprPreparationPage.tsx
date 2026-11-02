@@ -1,9 +1,12 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import {
+  ArrowRight,
   Calculator,
+  Check,
   Download,
   FileStack,
+  FileText,
   Plus,
   RotateCcw,
   TriangleAlert,
@@ -13,6 +16,7 @@ import { Card, CardHeader } from "@/components/ui/Card";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { PageHeader } from "@/components/ui/PageHeader";
 import { ActiveDprPicker } from "@/features/dprs/ActiveDprPicker";
+import { DprSummaryHeader } from "@/features/dprs/DprSummaryHeader";
 import { useActiveDpr } from "@/features/dprs/useActiveDpr";
 import { useDprDocuments } from "@/features/documents/api";
 import {
@@ -42,16 +46,19 @@ import type { BoqReadResult } from "@/features/boq-import/types";
 import type { BoqReads } from "@/lib/sampleStore";
 import { useEstimate, useSaveEstimate } from "./api";
 import { BoqTable } from "./BoqTable";
+import { RatePricingCard } from "@/features/rates/RatePricingCard";
 import { CostBenefitCard } from "./CostBenefitCard";
-import { DprDocumentPanel } from "@/features/dpr-document/DprDocumentPanel";
+import {
+  GenerateDprPanel,
+  ReportTextPanel,
+} from "@/features/dpr-document/DprDocumentPanel";
+import { PertPanel } from "@/features/dpr-document/PertPanel";
 import { contentOf } from "@/features/dpr-document/content";
-import { dprGaps } from "@/features/dpr-document/readiness";
-
-const TABS = [
-  { key: "estimate", label: "Estimate" },
-  { key: "finance", label: "Cost-benefit" },
-  { key: "document", label: "DPR document" },
-] as const;
+import {
+  STEPS,
+  dprChecklist,
+  type StepKey,
+} from "@/features/dpr-document/readiness";
 import {
   abstractOf,
   generalAbstract,
@@ -444,7 +451,15 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
   const toast = useToast();
   const [confirmReset, setConfirmReset] = useState(false);
   const [reviewing, setReviewing] = useState<BoqReadResult | null>(null);
-  const [tab, setTab] = useState<(typeof TABS)[number]["key"]>("estimate");
+  const [tab, setTabState] = useState<StepKey>("inputs");
+  const setTab = (step: StepKey) => {
+    setTabState(step);
+    requestAnimationFrame(() =>
+      document
+        .getElementById(`tab-${step}`)
+        ?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }),
+    );
+  };
   const reads = useBoqReads(dpr.id);
 
   if (!estimate.data)
@@ -462,7 +477,12 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
     e.lines.some((l) => l.section === "dismantling");
   const missingRates = linesMissingRates(e);
   const lineWorks = hasLineWorks(e);
-  const ready = dprGaps(e, docs, contentOf(dpr, e)).length === 0;
+  const checklist = dprChecklist(e, docs, contentOf(dpr, e));
+  const ready = checklist.length === 0;
+  const stepDone = (step: StepKey) =>
+    step === "generate" ? ready : !checklist.some((g) => g.step === step);
+  const stepIndex = STEPS.findIndex((s) => s.key === tab);
+  const next = STEPS[stepIndex + 1];
 
   const download = async () => {
     try {
@@ -485,6 +505,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
   };
   const importLines = (plan: ImportPlan, mode: ImportMode) => {
     change(applyImport(e, plan, mode));
+    setTab("estimate");
     toast({
       title: `Imported ${plan.lines.length} items`,
       description: `${reviewing!.fileName} into ${plan.sections.map(sectionLabel).join(", ")}`,
@@ -538,36 +559,81 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
               Reset to template
             </button>
           )}
-          <button type="button" className="btn-primary" onClick={download}>
+          <button type="button" className="btn-secondary" onClick={download}>
             <Download className="h-3.5 w-3.5" aria-hidden />
             Download Excel
+          </button>
+          <button
+            type="button"
+            className="btn-primary"
+            onClick={() => setTab("generate")}
+          >
+            <FileText className="h-3.5 w-3.5" aria-hidden />
+            Generate full DPR
           </button>
         </div>
       </div>
 
       <SummaryStrip collected={collected} e={e} />
 
-      <div
-        role="tablist"
-        aria-label="Preparation steps"
-        className="flex gap-1 border-b border-gray-200"
-      >
-        {TABS.map((t) => (
-          <button
-            key={t.key}
-            type="button"
-            role="tab"
-            id={`tab-${t.key}`}
-            aria-selected={tab === t.key}
-            aria-controls={`panel-${t.key}`}
-            onClick={() => setTab(t.key)}
-            className={`-mb-px border-b-2 px-3 py-2 text-[13px] font-medium ${tab === t.key ? "border-gray-900 text-gray-900" : "border-transparent text-gray-500 hover:text-gray-800"}`}
-          >
-            {t.label}
-          </button>
-        ))}
-      </div>
+      <nav aria-label="Preparation steps">
+        <ol
+          role="tablist"
+          aria-label="Preparation steps"
+          className="flex flex-wrap gap-1 border-b border-gray-200"
+        >
+          {STEPS.map((t, i) => {
+            const done = stepDone(t.key);
+            return (
+              <li key={t.key} className="flex">
+                <button
+                  type="button"
+                  role="tab"
+                  id={`tab-${t.key}`}
+                  aria-selected={tab === t.key}
+                  aria-controls={`panel-${t.key}`}
+                  aria-label={t.label}
+                  onClick={() => setTab(t.key)}
+                  className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-[13px] font-medium ${tab === t.key ? "border-gray-900 text-gray-900" : "border-transparent text-gray-500 hover:text-gray-800"}`}
+                >
+                  <span
+                    aria-hidden
+                    className={`flex h-5 w-5 items-center justify-center rounded-full text-[11px] ${done ? "bg-emerald-600 text-white" : tab === t.key ? "bg-gray-900 text-white" : "bg-gray-100 text-gray-600"}`}
+                  >
+                    {done ? <Check className="h-3 w-3" /> : i + 1}
+                  </span>
+                  {t.label}
+                </button>
+              </li>
+            );
+          })}
+        </ol>
+      </nav>
 
+      {tab === "inputs" && (
+        <div
+          role="tabpanel"
+          id="panel-inputs"
+          aria-labelledby="tab-inputs"
+          className="space-y-4"
+        >
+          <InputsCard
+            dprId={dpr.id}
+            docs={docs}
+            reads={reads.data ?? {}}
+            onReview={startReview}
+          />
+          {reviewing && (
+            <BoqReview
+              key={`${reviewing.fileName}-${reviewing.readAt}`}
+              read={reviewing}
+              currentLines={e.lines}
+              onCancel={() => setReviewing(null)}
+              onImport={importLines}
+            />
+          )}
+        </div>
+      )}
       {tab === "estimate" && (
         <div
           role="tabpanel"
@@ -612,21 +678,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
             </p>
           )}
 
-          <InputsCard
-            dprId={dpr.id}
-            docs={docs}
-            reads={reads.data ?? {}}
-            onReview={startReview}
-          />
-          {reviewing && (
-            <BoqReview
-              key={`${reviewing.fileName}-${reviewing.readAt}`}
-              read={reviewing}
-              currentLines={e.lines}
-              onCancel={() => setReviewing(null)}
-              onImport={importLines}
-            />
-          )}
+          <RatePricingCard estimate={e} onChange={change} />
           <BoqTable section="electrical" estimate={e} onChange={change} />
           <BoqTable section="civil" estimate={e} onChange={change} />
           <AbstractCard e={e} part="I" onChange={change} />
@@ -653,17 +705,39 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
           aria-labelledby="tab-finance"
           className="space-y-4"
         >
-          <CostBenefitCard e={e} onChange={change} />
+          <CostBenefitCard e={e} onChange={change} capacity={dpr.capacity} />
         </div>
       )}
-      {tab === "document" && (
-        <div role="tabpanel" id="panel-document" aria-labelledby="tab-document">
-          <DprDocumentPanel
+      {tab === "schedule" && (
+        <div role="tabpanel" id="panel-schedule" aria-labelledby="tab-schedule">
+          <PertPanel dpr={dpr} estimate={e} onChange={change} />
+        </div>
+      )}
+      {tab === "text" && (
+        <div role="tabpanel" id="panel-text" aria-labelledby="tab-text">
+          <ReportTextPanel dpr={dpr} estimate={e} onChange={change} />
+        </div>
+      )}
+      {tab === "generate" && (
+        <div role="tabpanel" id="panel-generate" aria-labelledby="tab-generate">
+          <GenerateDprPanel
             dpr={dpr}
             estimate={e}
             documents={docs}
-            onChange={change}
+            onGoTo={setTab}
           />
+        </div>
+      )}
+      {next && (
+        <div className="flex justify-end">
+          <button
+            type="button"
+            className="btn-secondary"
+            onClick={() => setTab(next.key)}
+          >
+            Next: {next.label}
+            <ArrowRight className="h-3.5 w-3.5" aria-hidden />
+          </button>
         </div>
       )}
       <p className="text-xs text-gray-500">
@@ -730,10 +804,11 @@ export function DprPreparationPage() {
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         title="DPR Preparation"
-        description="Collected documents and the electrical and civil BOQ estimate for each DPR."
+        description="Six steps from the collected documents to a complete DPR: inputs, estimate, cost-benefit, PERT schedule, report text, then generate."
       />
       <div className="space-y-4">
         <ActiveDprPicker rows={rows} value={activeId} onChange={choose} />
+        {active && <DprSummaryHeader dpr={active} />}
         {body}
       </div>
     </div>

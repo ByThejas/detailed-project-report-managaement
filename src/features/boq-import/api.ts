@@ -4,10 +4,13 @@ import type { EstimateSection } from '@/features/preparation/types';
 import { isReadableBoq, readBoqWorkbook } from './readWorkbook';
 import type { BoqReadResult } from './types';
 
-/** Documents whose Excel files are read into the estimate, and the BOQ part each one fills. */
+/**
+ * Documents whose Excel files are read into the estimate, and the BOQ part used for sheets whose part
+ * can't be told from their name. The one BOQ workbook holds electrical and civil sheets; each sheet goes
+ * to its own part when read.
+ */
 export const BOQ_DOCUMENTS: Record<string, EstimateSection> = {
   'bill-of-quantity-electrical': 'electrical',
-  'bill-of-quantity-civil': 'civil',
 };
 
 /** BOQ files read for a DPR, kept in this browser until the backend exists. */

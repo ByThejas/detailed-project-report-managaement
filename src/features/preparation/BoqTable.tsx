@@ -4,7 +4,7 @@ import { Card, CardHeader } from '@/components/ui/Card';
 import { formatNumber } from '@/lib/format';
 import { SECTION_KEYS, lineAmounts, sectionTotals, type TotalKey } from './calc';
 import { NumberInput } from './NumberInput';
-import { newLine } from './template';
+import { TEMPLATE_SOURCE, newLine } from './template';
 import { isMultiRate, type Estimate, type EstimateLine, type EstimateSection } from './types';
 
 const rupees = (n: number) => formatNumber(Math.round(n * 100) / 100);
@@ -35,7 +35,17 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
   const testingKey: TotalKey = keys.testing ?? single;
 
   const patch = (id: string, change: Partial<EstimateLine>) =>
-    onChange({ ...estimate, lines: estimate.lines.map((l) => (l.id === id ? { ...l, ...change } : l)) });
+    onChange({
+      ...estimate,
+      // A sample line the user has edited counts as checked, so it no longer keeps the DPR a draft.
+      lines: estimate.lines.map((l) => {
+        if (l.id !== id) return l;
+        const next = { ...l, ...change, ...(l.source === TEMPLATE_SOURCE ? { source: `${TEMPLATE_SOURCE}, edited` } : {}) };
+        // A rate typed by hand is no longer the schedule-of-rates item's.
+        if ('supplyRate' in change || 'erectionRate' in change || 'testingRate' in change) delete next.rateRef;
+        return next;
+      }),
+    });
   const remove = (id: string) => onChange({ ...estimate, lines: estimate.lines.filter((l) => l.id !== id) });
   const add = () => onChange({ ...estimate, lines: [...estimate.lines, newLine(section, `${meta.prefix}${lines.length + 1}`)] });
   const setMisc = (key: TotalKey, n: number) => onChange({ ...estimate, misc: { ...estimate.misc, [key]: n } });
@@ -109,6 +119,7 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
                       className="block min-h-[2.75rem] w-full min-w-[16rem] resize-y rounded border border-transparent bg-transparent px-1.5 py-1 leading-snug text-gray-900 hover:border-gray-200 focus:border-accent-500 focus:bg-white focus:outline-none"
                     />
                     {l.source && <p className="px-1.5 text-xs text-gray-400">From {l.source}</p>}
+                    {l.rateRef && <p className="px-1.5 text-xs text-emerald-700">Rates: {l.rateRef}</p>}
                     {noRate && <p className="px-1.5 text-xs text-amber-700">Rate needed</p>}
                   </td>
                   <td className="px-2 py-1.5">

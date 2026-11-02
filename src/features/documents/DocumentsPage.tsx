@@ -5,6 +5,7 @@ import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader } from '@/components/ui/PageHeader';
 import { ActiveDprPicker } from '@/features/dprs/ActiveDprPicker';
+import { DprSummaryHeader } from '@/features/dprs/DprSummaryHeader';
 import { useActiveDpr } from '@/features/dprs/useActiveDpr';
 import { useToast } from '@/lib/toast';
 import { BOQ_DOCUMENTS, useReadBoqFiles, useRemoveBoqRead } from '@/features/boq-import/api';
@@ -184,6 +185,7 @@ export function DocumentsPage() {
       <PageHeader title="Documents" description="Attach the documents each DPR needs, then send them to the consultant." />
       <div className="space-y-4">
         <ActiveDprPicker rows={rows} value={activeId} onChange={choose} />
+        {active && <DprSummaryHeader dpr={active} />}
         {body}
       </div>
     </div>

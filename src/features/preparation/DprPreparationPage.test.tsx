@@ -6,6 +6,7 @@ import { sampleStore } from '@/lib/sampleStore';
 
 const KOGALI = row({ id: 'DPR/PEE/2026/0001', project: '66/11kV Kogali S/S', voltage: '66 kV', capacity: '2x20 MVA', stream: 'Brownfield' });
 const url = `/preparation?dpr=${encodeURIComponent(KOGALI.id)}`;
+const openStep = async (name: string) => userEvent.click(await screen.findByRole('tab', { name }));
 
 describe('DPR Preparation', () => {
   it('asks to create a DPR first when none exist', async () => {
@@ -24,17 +25,18 @@ describe('DPR Preparation', () => {
   it('builds the BOQ from the DPR capacity and lists the ten input documents', async () => {
     seed([KOGALI]);
     renderAt(url);
-    const electrical = await screen.findByRole('region', { name: 'Electrical BOQ (Part A)' });
-    expect(within(electrical).getByDisplayValue(/Power transformer 20 MVA, 66\/11 kV/)).toBeInTheDocument();
-    expect(screen.getByRole('region', { name: 'Civil BOQ (Part B)' })).toBeInTheDocument();
-
-    const inputs = screen.getByRole('region', { name: 'Input documents' });
+    const inputs = await screen.findByRole('region', { name: 'Input documents' });
     expect(within(inputs).getAllByRole('listitem')).toHaveLength(10);
     expect(within(inputs).getByText('TCCM Proposal')).toBeInTheDocument();
     expect(within(inputs).getAllByText('Missing')).toHaveLength(10);
     expect(screen.getByText('In preparation')).toBeInTheDocument();
     expect(screen.queryByText(/This estimate was built for/)).not.toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'Estimate summary' })).getByText('0 / 10')).toBeInTheDocument();
+
+    await openStep('Estimate');
+    const electrical = screen.getByRole('region', { name: 'Electrical BOQ (Part A)' });
+    expect(within(electrical).getByDisplayValue(/Power transformer 20 MVA, 66\/11 kV/)).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'Civil BOQ (Part B)' })).toBeInTheDocument();
   });
 
   it('shows files attached in Documents', async () => {
@@ -53,6 +55,7 @@ describe('DPR Preparation', () => {
   it('adds the dismantling estimate and Abstract-II for a brownfield DPR only', async () => {
     seed([KOGALI]);
     renderAt(url);
+    await openStep('Estimate');
     expect(await screen.findByRole('region', { name: 'Dismantling (Abstract-II)' })).toBeInTheDocument();
     expect(screen.getByRole('region', { name: 'Abstract-II' })).toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'General abstract' })).getByText('Dismantling of the existing equipment (Abstract-II)')).toBeInTheDocument();
@@ -61,15 +64,48 @@ describe('DPR Preparation', () => {
   it('starts a greenfield DPR empty with no dismantling', async () => {
     seed([row({ ...KOGALI, stream: 'Greenfield' })]);
     renderAt(url);
+    await openStep('Estimate');
     expect(await screen.findByRole('region', { name: 'General abstract' })).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Abstract-II' })).not.toBeInTheDocument();
     expect(screen.getByText(/Greenfield estimates start empty/)).toBeInTheDocument();
   });
 
+  it('prices a BOQ item from the rate catalog only after the match is ticked', async () => {
+    seed([row({ ...KOGALI, capacity: '1x12.5 MVA', voltage: '110 kV' })]);
+    renderAt(url);
+    await openStep('Estimate');
+    const card = screen.getByRole('region', { name: 'Price from the rate catalog' });
+    await userEvent.click(within(card).getByRole('button', { name: 'Find rates' }));
+    const table = await within(card).findByRole('table', { name: 'Rate suggestions' }, { timeout: 8000 });
+    const apply = within(card).getByRole('button', { name: /^Apply rates to 0 items/ });
+    expect(apply).toBeDisabled();
+    // Take the exact SoR item by code: 1.11 is the 12.5 MVA, 66/11 kV transformer.
+    await userEvent.selectOptions(within(table).getAllByRole('combobox')[0]!, 'SoR code typed by hand…');
+    await userEvent.type(within(table).getByRole('textbox', { name: /SoR code for/ }), '1.11');
+    expect(within(table).getByText(/By code 1\.11/)).toBeInTheDocument();
+    await userEvent.click(within(table).getAllByRole('checkbox')[0]!);
+    await userEvent.click(within(card).getByRole('button', { name: 'Apply rates to 1 item' }));
+    const electrical = screen.getByRole('region', { name: 'Electrical BOQ (Part A)' });
+    expect(within(electrical).getAllByRole('spinbutton', { name: /Supply rate/ })[0]).toHaveValue(20_715_000);
+    expect(within(electrical).getByText(/Rates: SoR 2023-24 · By code 1\.11/)).toBeInTheDocument();
+  });
+
+  it('works out B/C ratio, IRR and payback the KPTCL way from the BCR inputs', async () => {
+    seed([KOGALI]);
+    renderAt(url);
+    await openStep('Cost-benefit');
+    const cba = screen.getByRole('region', { name: 'Cost-benefit analysis' });
+    expect(within(cba).getByText('Benefit-cost ratio').nextElementSibling).toHaveTextContent('—');
+    await userEvent.click(within(cba).getByRole('button', { name: 'Use 40 MVA' }));
+    expect(within(cba).getByRole('spinbutton', { name: 'Additional load after enhancement' })).toHaveValue(40);
+    expect(within(cba).getByText('Benefit-cost ratio').nextElementSibling).not.toHaveTextContent('—');
+  });
+
   it('works out B/C ratio, IRR and payback from benefits pasted from the BCR sheet', async () => {
     seed([KOGALI]);
     renderAt(url);
-    await userEvent.click(await screen.findByRole('tab', { name: 'Cost-benefit' }));
+    await openStep('Cost-benefit');
+    await userEvent.click(screen.getByRole('radio', { name: 'Enter yearly benefits by hand' }));
     const cba = screen.getByRole('region', { name: 'Cost-benefit analysis' });
     await userEvent.click(within(cba).getByRole('textbox'));
     await userEvent.paste('300\t300\t300\t300\tn/a');
@@ -79,21 +115,42 @@ describe('DPR Preparation', () => {
     expect(within(cba).getByText('Payback').nextElementSibling).toHaveTextContent('3 years');
   });
 
-  it('lists what keeps the Word DPR a draft and updates as text is written', async () => {
+  it('lists what keeps the DPR a draft, by step, and updates as text is written', async () => {
     seed([KOGALI]);
     renderAt(url);
-    await userEvent.click(await screen.findByRole('tab', { name: 'DPR document' }));
-    const panel = screen.getByRole('region', { name: 'DPR document (Word)' });
-    expect(within(panel).getByRole('button', { name: 'Download draft (Word)' })).toBeInTheDocument();
-    expect(within(panel).getByText('document: TCCM Proposal')).toBeInTheDocument();
-    expect(within(panel).getByText('text: Existing capacity')).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole('button', { name: 'Generate full DPR' }));
+    const panel = screen.getByRole('region', { name: 'Generate full DPR' });
+    expect(within(panel).getByRole('button', { name: 'Generate draft DPR (Word)' })).toBeInTheDocument();
+    const missing = screen.getByRole('region', { name: 'Still missing' });
+    expect(within(missing).getByText('TCCM Proposal')).toBeInTheDocument();
+    expect(within(missing).getByText('Existing capacity')).toBeInTheDocument();
+    expect(within(missing).getByText('BCR inputs (additional MVA)')).toBeInTheDocument();
+    const outline = screen.getByRole('region', { name: 'What goes into the DPR' });
+    expect(within(outline).getByText('PERT chart')).toBeInTheDocument();
+    expect(within(outline).getByText('R&D earthmat design report')).toBeInTheDocument();
+
+    await openStep('Report text');
     await userEvent.type(screen.getByRole('textbox', { name: 'Existing capacity' }), '2x8 MVA, 66/11 kV');
-    expect(within(panel).queryByText('text: Existing capacity')).not.toBeInTheDocument();
+    await openStep('Generate DPR');
+    expect(within(screen.getByRole('region', { name: 'Still missing' })).queryByText('Existing capacity')).not.toBeInTheDocument();
+  });
+
+  it('edits the PERT stages and flags a chart that overruns the completion period', async () => {
+    seed([KOGALI]);
+    renderAt(url);
+    await openStep('PERT schedule');
+    const pert = screen.getByRole('region', { name: 'PERT chart' });
+    expect(within(pert).getByDisplayValue('Stage-III')).toBeInTheDocument();
+    const months = within(pert).getByRole('spinbutton', { name: 'Stage-III months' });
+    await userEvent.clear(months);
+    await userEvent.type(months, '9');
+    expect(within(pert).getByRole('status')).toHaveTextContent('stages run to M16, past the 12-month completion period');
   });
 
   it('recalculates the abstract when a quantity changes and keeps the edit', async () => {
     seed([KOGALI]);
     renderAt(url);
+    await openStep('Estimate');
     const abstract = await screen.findByRole('region', { name: 'Abstract-I' });
     const totalRow = () => within(abstract).getByText('Total estimate cost (7 to 10)').closest('tr')!;
     const before = totalRow().textContent;
@@ -106,6 +163,7 @@ describe('DPR Preparation', () => {
     cleanup();
 
     renderAt(url);
+    await openStep('Estimate');
     const again = await screen.findByRole('region', { name: 'Electrical BOQ (Part A)' });
     expect(within(again).getAllByRole('spinbutton', { name: /Quantity/ })[0]).toHaveValue(3);
   });
@@ -113,6 +171,7 @@ describe('DPR Preparation', () => {
   it('flags items without a rate and resets to the template after confirming', async () => {
     seed([row({ ...KOGALI, capacity: '1x12.5 MVA', voltage: '110 kV' })]);
     renderAt(url);
+    await openStep('Estimate');
     expect(await screen.findByText(/needs a rate from the schedule of rates: A1 a/)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole('button', { name: 'Reset to template' }));

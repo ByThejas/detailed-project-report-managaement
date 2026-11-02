@@ -1,7 +1,7 @@
 import { exportWorkbook, sheet } from '@/lib/exportExcel';
 import type { DprRow } from '@/features/reports/types';
 import { abstractOf, generalAbstract, hasLineWorks, lineAmounts, sectionTotals } from './calc';
-import { DEFAULT_FINANCIALS, summariseFinancials } from './finance';
+import { DEFAULT_BCR_INPUTS, DEFAULT_FINANCIALS, kptclAppraisal, summariseFinancials } from './finance';
 import type { Estimate } from './types';
 
 interface Row {
@@ -90,15 +90,31 @@ export function exportEstimate(dpr: DprRow, e: Estimate) {
 
   const f = e.financials ?? DEFAULT_FINANCIALS;
   const fs = summariseFinancials(g.total, f);
+  const kptcl = f.method === 'kptcl' ? kptclAppraisal(g.total, f.inputs ?? DEFAULT_BCR_INPUTS) : null;
+  const inputs = f.inputs ?? DEFAULT_BCR_INPUTS;
   const finance = [
     { label: 'Project cost (Rs lakh)', value: g.total },
-    { label: 'Discount rate (%)', value: f.discountRatePct },
+    { label: 'Method', value: kptcl ? 'KPTCL BCR workbook (from inputs)' : 'Benefits entered by hand' },
+    ...(kptcl
+      ? [
+          { label: 'Additional load (MVA)', value: inputs.addedMva },
+          { label: 'Energy savings (MU)', value: inputs.energySavingsMu },
+          { label: 'Sale price (Rs/unit)', value: inputs.salePrice },
+          { label: 'Transmission charges (Rs/unit)', value: inputs.transmissionCharge },
+          { label: 'Load growth (%)', value: inputs.loadGrowthPct },
+          { label: 'Discount rate (%)', value: inputs.discountRatePct },
+          { label: 'O&M (% of cost)', value: inputs.omPct },
+          { label: 'Escalation (%)', value: inputs.escalationPct },
+        ]
+      : [{ label: 'Discount rate (%)', value: f.discountRatePct }]),
     { label: 'Benefit-cost ratio', value: fs.bcr === null ? '' : Number(fs.bcr.toFixed(2)) },
     { label: 'Internal rate of return (%)', value: fs.irr === null ? '' : Number((fs.irr * 100).toFixed(1)) },
     { label: 'Payback (years)', value: fs.payback ?? '' },
     { label: 'Discounted payback (years)', value: fs.discountedPayback ?? '' },
     { label: '', value: '' },
-    ...f.benefits.map((b, i) => ({ label: `Benefit, year ${i + 1} (Rs lakh)`, value: b })),
+    ...(kptcl
+      ? kptcl.schedule.map((y) => ({ label: `Year ${y.year}: income / cash flow / cumulative DCF (Rs lakh)`, value: `${y.income.toFixed(2)} / ${y.cashFlow.toFixed(2)} / ${y.cumulative.toFixed(2)}` }))
+      : f.benefits.map((b, i) => ({ label: `Benefit, year ${i + 1} (Rs lakh)`, value: b }))),
   ];
 
   const date = new Date().toISOString().slice(0, 10);

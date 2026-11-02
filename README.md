@@ -77,6 +77,10 @@ turned into `src/data/locations.ts` and `src/data/stations.ts` by
 hand. The script fixes station codes that Excel damaged, ignores repeated rows and prints
 what it found. DPR Initialization and the Reports filters use this tree.
 
+The rate catalog (Common SoR 2023-24) lives in `data/rate_catalog.xlsx` and is turned into `src/data/rateCatalog.json` by
+`npm run generate:rates` (optionally `-- path/to/new.xlsx`). The app loads it only when "Find rates" is opened on the
+Estimate step.
+
 ### Estimate (DPR Preparation)
 
 The method follows the Kogali 66 kV sample DPR (`src/features/preparation/`):
