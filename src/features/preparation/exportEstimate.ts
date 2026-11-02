@@ -1,6 +1,6 @@
 import { exportWorkbook, sheet } from '@/lib/exportExcel';
 import type { DprRow } from '@/features/reports/types';
-import { abstractOf, generalAbstract, lineAmounts, sectionTotals } from './calc';
+import { abstractOf, generalAbstract, hasLineWorks, lineAmounts, sectionTotals } from './calc';
 import { DEFAULT_FINANCIALS, summariseFinancials } from './finance';
 import type { Estimate } from './types';
 
@@ -19,7 +19,7 @@ interface Row {
 
 const blank = { code: '', unit: '', qty: '', supplyRate: '', erectionRate: '', testingRate: '' };
 
-/** General abstract, Abstract-I and II, Part A, Part B and dismantling sheets, laid out like the KPTCL estimate. */
+/** General abstract, the abstracts, Part A, Part B, line works and dismantling sheets, laid out like the KPTCL estimate. */
 export function exportEstimate(dpr: DprRow, e: Estimate) {
   const { subTotal, total } = sectionTotals(e);
   const heading = `${dpr.project} (${dpr.id})`;
@@ -53,10 +53,25 @@ export function exportEstimate(dpr: DprRow, e: Estimate) {
     { ...blank, description: 'Miscellaneous', supply: e.misc.dismantling ?? 0, erection: '', testing: '' },
     { ...blank, description: 'Total', supply: total.dismantling, erection: '', testing: '' },
   ];
+  const lineWorks = hasLineWorks(e);
+  const lineSupply: Row[] = [
+    ...lineRows('line'),
+    { ...blank, description: 'Sub total', supply: subTotal.lineSupply, erection: subTotal.lineErection, testing: subTotal.lineTesting },
+    { ...blank, description: 'Miscellaneous', supply: e.misc.lineSupply ?? 0, erection: e.misc.lineErection ?? 0, testing: e.misc.lineTesting ?? 0 },
+    { ...blank, description: 'Total', supply: total.lineSupply, erection: total.lineErection, testing: total.lineTesting },
+  ];
+  const lineCivil: Row[] = [
+    ...lineRows('lineCivil'),
+    { ...blank, description: 'Sub total', supply: subTotal.lineCivil, erection: '', testing: '' },
+    { ...blank, description: 'Miscellaneous and unforeseen', supply: e.misc.lineCivil ?? 0, erection: '', testing: '' },
+    { ...blank, description: 'Total', supply: total.lineCivil, erection: '', testing: '' },
+  ];
   const g = generalAbstract(e);
+  let n = 1;
   const general = [
-    { i: 1, label: 'Part A capital works (Abstract-I)', lakhs: g.capital },
-    ...(dismantling ? [{ i: 2, label: 'Dismantling of the existing equipment (Abstract-II)', lakhs: g.dismantling }] : []),
+    { i: n++, label: 'Substation capital works (Abstract-I)', lakhs: g.capital },
+    ...(lineWorks ? [{ i: n++, label: 'Line works', lakhs: g.line }] : []),
+    ...(dismantling ? [{ i: n++, label: 'Dismantling of the existing equipment (Abstract-II)', lakhs: g.dismantling }] : []),
     { i: '', label: 'Total project cost', lakhs: g.total },
   ];
   const abstractColumns = [
@@ -90,6 +105,9 @@ export function exportEstimate(dpr: DprRow, e: Estimate) {
   return exportWorkbook(`DPR_Estimate_${dpr.id.replace(/\W+/g, '-')}_${date}.xlsx`, [
     sheet({ sheetName: 'General Abstract', title: 'General abstract (Rs. lakhs)', notes, columns: abstractColumns, rows: general }),
     sheet({ sheetName: 'Abstract-I', title: 'Abstract-I: capital works (Rs. lakhs)', notes, columns: abstractColumns, rows: abstractOf(e, 'I').map((r, i) => ({ ...r, i: i + 1 })) }),
+    ...(lineWorks
+      ? [sheet({ sheetName: 'Line Abstract', title: 'Abstract: line works (Rs. lakhs)', notes, columns: abstractColumns, rows: abstractOf(e, 'line').map((r, i) => ({ ...r, i: i + 1 })) })]
+      : []),
     ...(dismantling
       ? [sheet({ sheetName: 'Abstract-II', title: 'Abstract-II: dismantling (Rs. lakhs)', notes, columns: abstractColumns, rows: abstractOf(e, 'II').map((r, i) => ({ ...r, i: i + 1 })) })]
       : []),
@@ -135,6 +153,29 @@ export function exportEstimate(dpr: DprRow, e: Estimate) {
       ],
       rows: finance,
     }),
+    ...(lineWorks
+      ? [
+          sheet<Row>({
+            sheetName: 'Line Supply',
+            title: 'Line works: supply and erection (Rs)',
+            notes,
+            columns: [
+              { header: 'Sl. no.', width: 9, value: (r) => r.code },
+              { header: 'Description', width: 60, value: (r) => r.description },
+              { header: 'Unit', width: 10, value: (r) => r.unit },
+              { header: 'Qty', width: 9, value: (r) => r.qty },
+              { header: 'Material unit rate', width: 16, value: (r) => r.supplyRate },
+              { header: 'Material amount', width: 16, value: (r) => r.supply },
+              { header: 'Labour unit rate', width: 15, value: (r) => r.erectionRate },
+              { header: 'Labour amount', width: 15, value: (r) => r.erection },
+              { header: 'T&C unit rate', width: 13, value: (r) => r.testingRate },
+              { header: 'T&C amount', width: 14, value: (r) => r.testing },
+            ],
+            rows: lineSupply,
+          }),
+          sheet<Row>({ sheetName: 'Line Civil', title: 'Line works: civil portion (Rs)', notes, columns: singleRateColumns, rows: lineCivil }),
+        ]
+      : []),
     ...(dismantling ? [sheet<Row>({ sheetName: 'Dismantling', title: 'Dismantling: decommissioning part (Rs)', notes, columns: singleRateColumns, rows: partD })] : []),
   ]);
 }

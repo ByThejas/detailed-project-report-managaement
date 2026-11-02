@@ -5,3 +5,6 @@ coverage
 .env
 .env.*
 !.env.example
+
+# Real estimate workbooks used by optional local tests (not committed: the repo is public)
+fixtures/private/

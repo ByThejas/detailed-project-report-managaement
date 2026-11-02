@@ -95,7 +95,7 @@ describe('DPR Preparation', () => {
     seed([KOGALI]);
     renderAt(url);
     const abstract = await screen.findByRole('region', { name: 'Abstract-I' });
-    const totalRow = () => within(abstract).getByText('Total estimate cost (7 + 8)').closest('tr')!;
+    const totalRow = () => within(abstract).getByText('Total estimate cost (7 to 10)').closest('tr')!;
     const before = totalRow().textContent;
 
     const electrical = screen.getByRole('region', { name: 'Electrical BOQ (Part A)' });

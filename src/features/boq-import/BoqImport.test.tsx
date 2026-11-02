@@ -75,4 +75,50 @@ describe('BOQ import', () => {
     await userEvent.click(within(review).getByRole('checkbox', { name: 'Skip row 5' }));
     expect(within(review).getByRole('button', { name: /^Import 1 items/ })).toBeEnabled();
   });
+
+  it('imports a KPTCL workbook with line works: each sheet to its part, misc amounts and the line abstract charges', async () => {
+    const wb = new ExcelJS.Workbook();
+    const ss = wb.addWorksheet('SS Supply & Erection');
+    ss.addRow(['Sl No', 'Description', 'Unit', 'Qty', 'Supply rate', 'Supply amount']);
+    ss.addRow(['1', 'Power transformer 20 MVA', 'Nos', 1, 31_247_000, 31_247_000]);
+    ss.addRow([null, 'Sub-Total', null, null, null, 31_247_000]);
+    ss.addRow([null, 'Miscellaneous', null, null, null, 253_000]);
+    ss.addRow([null, 'Total', null, null, null, 31_500_000]);
+    const line = wb.addWorksheet('Line Supply');
+    line.addRow(['Sl No', 'Description', 'Unit', 'Qty', 'Material rate', 'Material amount', 'Labour rate', 'Labour amount']);
+    line.addRow(['1', 'Coyote ACSR conductor', 'Km', 1, 139_000, 139_000, 8_000, 8_000]);
+    line.addRow([null, 'Sub-Total', null, null, null, 139_000, null, 8_000]);
+    line.addRow([null, 'Miscellaneous', null, null, null, 11_000, null, 2_000]);
+    line.addRow([null, 'Total', null, null, null, 150_000, null, 10_000]);
+    const abs = wb.addWorksheet('TL ABS');
+    abs.addRow(['Construction of 66kV LILO line']);
+    abs.addRow(['Sl No', 'Description', 'Amount in Rs.']);
+    abs.addRow([1, 'Material Cost', 150_000]);
+    abs.addRow([2, 'Labour/Erection Charges', 10_000]);
+    abs.addRow([4, 'Basic Rate (Sum of Sl No. 1 to 3)', 160_000]);
+    abs.addRow([5, 'Area specifics loading on Basic Rates', 4_800]);
+    abs.addRow([6, 'Applicable GST on Sl No. 4 & 5', 29_664]);
+    abs.addRow([8, 'Statutory charges such as PTCC', 100_000]);
+    abs.addRow([9, 'Forest Clearence, Tree/Crop Cut Compensation', 50_000]);
+    const buffer = (await wb.xlsx.writeBuffer()) as ArrayBuffer;
+
+    seed([DPR]);
+    sampleStore.saveDocuments(DPR.id, { files: { 'bill-of-quantity-electrical': [{ name: 'estimate.xlsx', size: 1, addedAt: '2026-11-02T00:00:00Z' }] }, notApplicable: [] });
+    sampleStore.saveBoqRead(DPR.id, 'bill-of-quantity-electrical', await readBoqWorkbook(buffer, 'estimate.xlsx', 'electrical'));
+    renderAt(`/preparation?dpr=${enc}`);
+    await userEvent.click(await screen.findByRole('button', { name: 'Review & import' }));
+    const review = screen.getByRole('region', { name: 'Review BOQ import: estimate.xlsx' });
+    expect(within(review).getByText(/→ Line supply & erection/)).toBeInTheDocument();
+    expect(within(review).getByText(/Area loading 3% and GST 18%/)).toBeInTheDocument();
+    expect(within(review).getByText(/Line works charges from “TL ABS”: statutory Rs 1,00,000, forest\/tree\/crop Rs 50,000/)).toBeInTheDocument();
+
+    await userEvent.click(within(review).getByRole('button', { name: /^Import 2 items/ }));
+    expect(within(screen.getByRole('region', { name: 'Line works: supply & erection' })).getByDisplayValue('Coyote ACSR conductor')).toBeInTheDocument();
+    const lineAbstract = screen.getByRole('region', { name: 'Abstract: line works' });
+    // 1.6 lakh basic + 3% + 18% GST = 1.9446, + 1.0 statutory + 0.5 compensation = 3.4446.
+    expect(within(lineAbstract).getByText('Total estimate cost (7 to 10)').closest('tr')).toHaveTextContent('3.44');
+    expect(within(screen.getByRole('region', { name: 'General abstract' })).getByText('Line works')).toBeInTheDocument();
+    await waitFor(() => expect(sampleStore.estimate(DPR.id)!.misc).toMatchObject({ supply: 253_000, lineSupply: 11_000, lineErection: 2_000 }));
+    expect(sampleStore.estimate(DPR.id)!.areaLoadingPct).toBe(3);
+  });
 });

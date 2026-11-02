@@ -2,35 +2,35 @@ import { useMemo, useState } from 'react';
 import { CheckCircle2, TriangleAlert, X } from 'lucide-react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { formatNumber } from '@/lib/format';
-import type { EstimateLine } from '@/features/preparation/types';
+import { isMultiRate, type EstimateLine } from '@/features/preparation/types';
 import { openErrors, warningsOf } from './parse';
-import { toEstimateLine } from './toEstimateLine';
+import { planImport, sectionLabel, sectionOfItem, type ImportMode, type ImportPlan } from './toEstimateLine';
 import type { BoqReadResult, ParsedItem } from './types';
 
-const PART = { electrical: 'Part A', civil: 'Part B', dismantling: 'Dismantling' } as const;
 const amount = (n: number) => formatNumber(Math.round(n * 100) / 100);
 
-export type ImportMode = 'replace' | 'append';
+export type { ImportMode };
 
 interface BoqReviewProps {
   read: BoqReadResult;
-  /** How many lines the BOQ part has now, for the replace warning. */
-  currentCount: number;
+  /** The estimate's lines now, for the replace warning. */
+  currentLines: EstimateLine[];
   onCancel: () => void;
-  onImport: (lines: EstimateLine[], mode: ImportMode) => void;
+  onImport: (plan: ImportPlan, mode: ImportMode) => void;
 }
 
 /**
  * Shows every item read from a BOQ workbook next to its source row. Nothing reaches the estimate
  * until every included row is either clean, fixed, or explicitly confirmed.
  */
-export function BoqReview({ read, currentCount, onCancel, onImport }: BoqReviewProps) {
+export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewProps) {
   const [items, setItems] = useState<ParsedItem[]>(read.items);
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set());
   const [sheets, setSheets] = useState<Set<string>>(() => new Set(read.sheets.filter((s) => s.includedByDefault && s.headerRow).map((s) => s.name)));
   const [onlyAttention, setOnlyAttention] = useState(false);
   const [promoted, setPromoted] = useState<Set<string>>(new Set());
+  const [withCharges, setWithCharges] = useState(true);
 
   const toggle = (set: Set<string>, id: string, on: boolean) => {
     const next = new Set(set);
@@ -46,8 +46,10 @@ export function BoqReview({ read, currentCount, onCancel, onImport }: BoqReviewP
   const totalsOk = read.totals.filter((t) => sheets.has(t.sheet) && Math.abs(t.stated - t.computed) <= 1);
   const skipped = read.skipped.filter((s) => sheets.has(s.sheet) && !promoted.has(`${s.sheet}-${s.row}`));
   const tableSheets = read.sheets.filter((s) => s.headerRow);
-  const electrical = read.section === 'electrical';
-  const part = PART[read.section];
+  const sectionOfSheet = (name: string) => sectionOfItem({ sheet: name }, read);
+  const parts = [...new Set([...sheets].map(sectionOfSheet))];
+  const electrical = parts.some(isMultiRate);
+  const part = parts.map(sectionLabel).join(', ') || sectionLabel(read.section);
 
   const edit = (id: string, change: Partial<ParsedItem>) => setItems((all) => all.map((i) => (i.id === id ? { ...i, ...change } : i)));
   const promote = (s: (typeof read.skipped)[number]) => {
@@ -71,7 +73,9 @@ export function BoqReview({ read, currentCount, onCancel, onImport }: BoqReviewP
       ].sort((a, b) => (a.sheet === b.sheet ? a.row - b.row : 0)),
     );
   };
-  const lines = useMemo(() => included.map((i) => toEstimateLine(i, read)), [included, read]);
+  const plan = useMemo(() => planImport(read, included, sheets, withCharges), [read, included, sheets, withCharges]);
+  const lines = plan.lines;
+  const currentCount = currentLines.filter((l) => plan.sections.includes(l.section)).length;
 
   const th = 'px-2 py-2 font-medium';
   return (
@@ -97,7 +101,7 @@ export function BoqReview({ read, currentCount, onCancel, onImport }: BoqReviewP
                   <input type="checkbox" checked={sheets.has(s.name)} onChange={(e) => setSheets((set) => toggle(set, s.name, e.target.checked))} />
                   <span className="text-gray-900">{s.name}</span>
                   <span className="text-xs text-gray-500">
-                    header row {s.headerRow}
+                    → {sectionLabel(sectionOfSheet(s.name))} · header row {s.headerRow}
                     {s.note ? ` · ${s.note}` : ''}
                   </span>
                 </label>
@@ -131,6 +135,22 @@ export function BoqReview({ read, currentCount, onCancel, onImport }: BoqReviewP
                 : `All ${totalsOk.length} totals in the file match`}{' '}
             the items read.
           </p>
+        )}
+        {plan.notes.length > 0 && (
+          <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
+            <p className="font-medium text-gray-900">Also carried over from the file</p>
+            <ul className="mt-1 list-disc space-y-0.5 pl-5 text-gray-700">
+              {plan.notes.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+            {(read.abstracts ?? []).length > 0 && (
+              <label className="mt-1.5 flex items-center gap-1.5 text-gray-700">
+                <input type="checkbox" checked={withCharges} onChange={(e) => setWithCharges(e.target.checked)} />
+                Use the area loading, GST, statutory charges and compensation from the file’s abstract sheets
+              </label>
+            )}
+          </div>
         )}
         <label className="flex items-center gap-1.5 text-gray-700">
           <input type="checkbox" checked={onlyAttention} onChange={(e) => setOnlyAttention(e.target.checked)} />
@@ -170,6 +190,12 @@ export function BoqReview({ read, currentCount, onCancel, onImport }: BoqReviewP
                     {i.sheet}
                     <br />
                     row {i.row}
+                    {i.srRef && (
+                      <>
+                        <br />
+                        SR {i.srRef}
+                      </>
+                    )}
                   </td>
                   <td className="px-2 py-2 text-center">
                     <input type="checkbox" aria-label={`Skip row ${i.row}`} checked={off} onChange={(e) => setExcluded((x) => toggle(x, i.id, e.target.checked))} />
@@ -260,11 +286,11 @@ export function BoqReview({ read, currentCount, onCancel, onImport }: BoqReviewP
       )}
 
       <div className="flex flex-wrap items-center gap-3 border-t border-gray-200 px-4 py-3 text-[13px]">
-        <button type="button" className="btn-primary" disabled={blocking.length > 0 || lines.length === 0} onClick={() => onImport(lines, 'replace')}>
+        <button type="button" className="btn-primary" disabled={blocking.length > 0 || lines.length === 0} onClick={() => onImport(plan, 'replace')}>
           Import {lines.length} items{currentCount ? `, replacing the ${currentCount} in ${part}` : ` into ${part}`}
         </button>
         {currentCount > 0 && (
-          <button type="button" className="btn-secondary" disabled={blocking.length > 0 || lines.length === 0} onClick={() => onImport(lines, 'append')}>
+          <button type="button" className="btn-secondary" disabled={blocking.length > 0 || lines.length === 0} onClick={() => onImport(plan, 'append')}>
             Add to the current items
           </button>
         )}

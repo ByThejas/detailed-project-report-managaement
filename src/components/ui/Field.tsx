@@ -38,12 +38,18 @@ export const TextInput = forwardRef<HTMLInputElement, InputProps>(function TextI
   return <input ref={ref} aria-invalid={invalid || undefined} className={`${controlClass(invalid)} ${className}`} {...props} />;
 });
 
-type SelectProps = SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean; options: readonly string[] };
+/** `placeholder` adds an empty first option ("Units", "Rating") that can't be picked back once a value is chosen. */
+type SelectProps = SelectHTMLAttributes<HTMLSelectElement> & { invalid?: boolean; options: readonly string[]; placeholder?: string };
 
-export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select({ invalid, options, className = '', ...props }, ref) {
+export const Select = forwardRef<HTMLSelectElement, SelectProps>(function Select({ invalid, options, placeholder, className = '', ...props }, ref) {
   return (
     <div className="relative">
       <select ref={ref} aria-invalid={invalid || undefined} className={`${controlClass(invalid)} appearance-none pr-9 ${className}`} {...props}>
+        {placeholder !== undefined && (
+          <option value="" disabled>
+            {placeholder}
+          </option>
+        )}
         {options.map((o) => (
           <option key={o} value={o}>
             {o}
