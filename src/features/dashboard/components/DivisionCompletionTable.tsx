@@ -60,7 +60,7 @@ export function DivisionCompletionTable({ rows }: { rows: DivisionCompletion[] }
           </label>
         }
       />
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto relative">
         <table className="w-full text-[13px]">
           <thead>
             <tr className="border-b border-gray-200 text-xs text-gray-500">

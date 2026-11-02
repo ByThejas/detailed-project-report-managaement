@@ -78,7 +78,7 @@ export function DocumentTable({ group, docs, onAdd, onRemove, onNotApplicable, o
         }}
       />
 
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto relative">
         <table className="w-full min-w-[640px] text-[13px]">
           <thead>
             <tr className="border-y border-gray-200 bg-gray-50 text-left text-xs text-gray-500">

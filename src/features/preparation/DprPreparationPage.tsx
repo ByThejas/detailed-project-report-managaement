@@ -295,7 +295,8 @@ function ChargeInput({
         label={label}
         value={value}
         onChange={onChange}
-        className="w-28 border-gray-200"
+        boxed
+        className="w-28"
       />
     </label>
   );
@@ -331,7 +332,8 @@ function AbstractCard({
                 label="Area loading %"
                 value={e.areaLoadingPct}
                 onChange={(n) => onChange({ ...e, areaLoadingPct: n })}
-                className="w-16 border-gray-200"
+                boxed
+                className="w-16"
               />
             </label>
             <label className="flex items-center gap-1">
@@ -340,7 +342,8 @@ function AbstractCard({
                 label="GST %"
                 value={e.gstPct}
                 onChange={(n) => onChange({ ...e, gstPct: n })}
-                className="w-16 border-gray-200"
+                boxed
+                className="w-16"
               />
             </label>
             <ChargeInput
@@ -584,7 +587,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
         <ol
           role="tablist"
           aria-label="Preparation steps"
-          className="flex flex-wrap gap-1 border-b border-gray-200"
+          className="flex gap-1 overflow-x-auto overflow-y-hidden border-b border-gray-200 sm:flex-wrap sm:overflow-visible"
         >
           {STEPS.map((t, i) => {
             const done = stepDone(t.key);
@@ -598,7 +601,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
                   aria-controls={`panel-${t.key}`}
                   aria-label={t.label}
                   onClick={() => setTab(t.key)}
-                  className={`-mb-px flex items-center gap-2 border-b-2 px-3 py-2 text-[13px] font-medium ${tab === t.key ? "border-gray-900 text-gray-900" : "border-transparent text-gray-500 hover:text-gray-800"}`}
+                  className={`flex items-center gap-2 whitespace-nowrap border-b-2 px-3 py-2 text-[13px] font-medium sm:-mb-px ${tab === t.key ? "border-gray-900 text-gray-900" : "border-transparent text-gray-500 hover:text-gray-800"}`}
                 >
                   <span
                     aria-hidden

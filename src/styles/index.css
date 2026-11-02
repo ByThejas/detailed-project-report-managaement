@@ -15,6 +15,24 @@
   :focus-visible {
     @apply outline-none ring-2 ring-accent-500/40 ring-offset-1;
   }
+  /* Checkboxes and radios in the app accent instead of the browser's own blue. */
+  input[type='checkbox'],
+  input[type='radio'] {
+    accent-color: theme('colors.accent.600');
+  }
+  /* Number spinners appear only on hover and push right-aligned figures sideways. */
+  input[type='number']::-webkit-inner-spin-button,
+  input[type='number']::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+  input[type='number'] {
+    -moz-appearance: textfield;
+  }
+  /* File pickers styled like a secondary button. */
+  input[type='file']::file-selector-button {
+    @apply mr-2 h-7 cursor-pointer rounded-md border border-gray-200 bg-white px-2.5 text-xs font-medium text-gray-700 transition-colors hover:bg-gray-50;
+  }
 }
 
 @layer components {
@@ -32,6 +50,19 @@
   }
   .input {
     @apply block h-8 w-full rounded-md border border-gray-200 bg-white px-2.5 text-[13px] text-gray-900 placeholder:text-gray-400 focus:border-accent-500 focus:outline-none focus:ring-2 focus:ring-accent-500/15;
+  }
+  /* A textarea grows with its rows; the fixed control height is for single-line fields. */
+  textarea.input {
+    @apply h-auto;
+  }
+  /* Native selects that do not draw their own chevron get the same one as the shared Select. */
+  select:not(.appearance-none):not([multiple]) {
+    appearance: none;
+    background-repeat: no-repeat;
+    padding-right: 2rem;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23a1a1aa' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+    background-position: right 0.5rem center;
+    background-size: 14px 14px;
   }
   .label-muted {
     @apply text-2xs font-medium uppercase tracking-wider text-gray-500;

@@ -52,17 +52,17 @@ export function PertPanel({ dpr, estimate, onChange }: Props) {
         </div>
         <div className="divide-y divide-gray-100">
           {p.activities.map((a, i) => (
-            <div key={i} className="grid gap-2 px-4 py-2.5 text-[13px] sm:grid-cols-[1fr_6rem_6rem_7rem_2fr_auto] sm:items-start">
+            <div key={i} className="grid gap-2 px-4 py-2.5 text-[13px] sm:grid-cols-[1fr_auto_auto_auto_2fr_auto] sm:items-start">
               <input aria-label={`Activity ${i + 1} name`} className="input" value={a.name} onChange={(ev) => setAct(i, { name: ev.target.value })} />
-              <label className="flex items-center gap-1 text-xs text-gray-500">
+              <label className="flex items-center gap-1 whitespace-nowrap text-xs text-gray-500">
                 From M
                 <input aria-label={`${a.name} start month`} type="number" className="input w-14" value={a.start} onChange={(ev) => setAct(i, { start: int(ev.target.value) })} />
               </label>
-              <label className="flex items-center gap-1 text-xs text-gray-500">
+              <label className="flex items-center gap-1 whitespace-nowrap text-xs text-gray-500">
                 <input aria-label={`${a.name} months`} type="number" min={1} className="input w-14" value={a.months} onChange={(ev) => setAct(i, { months: int(ev.target.value) })} />
                 months
               </label>
-              <label className="flex items-center gap-1.5 text-xs text-gray-600">
+              <label className="flex h-8 items-center gap-1.5 whitespace-nowrap text-xs text-gray-600">
                 <input type="checkbox" checked={Boolean(a.preAward)} onChange={(ev) => setAct(i, { preAward: ev.target.checked })} />
                 Pre-award
               </label>
@@ -101,7 +101,7 @@ export function PertPanel({ dpr, estimate, onChange }: Props) {
 
       <Card role="region" aria-labelledby="pert-preview-title">
         <CardHeader id="pert-preview-title" title="Preview" subtitle={`${p.completionMonths} months from ${p.zeroDate}`} />
-        <div className="overflow-x-auto px-4 py-3">
+        <div className="overflow-x-auto px-4 py-3 relative">
           <table className="w-full min-w-[640px] text-xs">
             <thead>
               <tr className="text-gray-500">

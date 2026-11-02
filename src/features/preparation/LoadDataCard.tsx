@@ -34,23 +34,23 @@ export function LoadDataCard({ dpr, e, onChange }: { dpr: DprRow; e: Estimate; o
   return (
     <Card role="region" aria-labelledby="load-title">
       <CardHeader id="load-title" title="Load data" subtitle="From the Transformer & Feeder Load Details. Loading factor = peak MW ÷ (MVA × power factor)." />
-      <div className="grid gap-3 px-4 py-3 text-[13px] sm:grid-cols-4">
-        <label className="block">
-          <span className="label-muted mb-1 block">Existing transformers</span>
+      <div className="grid gap-x-3 gap-y-3 px-4 py-3 text-[13px] sm:grid-cols-4">
+        <label className="row-span-3 grid grid-rows-subgrid gap-y-1">
+          <span className="label-muted self-end">Existing transformers</span>
           <input className="input" placeholder="e.g. 1x12.5 MVA" value={load.existing} onChange={(ev) => set({ existing: ev.target.value })} />
         </label>
-        <label className="block">
-          <span className="label-muted mb-1 block">Recorded peak load (MW)</span>
-          <NumberInput label="Recorded peak load (MW)" value={load.peakMw} onChange={(n) => set({ peakMw: n })} className="w-full border-gray-200" />
+        <label className="row-span-3 grid grid-rows-subgrid gap-y-1">
+          <span className="label-muted self-end">Recorded peak load (MW)</span>
+          <NumberInput label="Recorded peak load (MW)" value={load.peakMw} onChange={(n) => set({ peakMw: n })} boxed className="w-full" />
         </label>
-        <label className="block">
-          <span className="label-muted mb-1 block">Capacity replaced (MVA)</span>
-          <NumberInput label="Capacity replaced (MVA)" value={load.replacedMva} onChange={(n) => set({ replacedMva: n })} className="w-full border-gray-200" />
+        <label className="row-span-3 grid grid-rows-subgrid gap-y-1">
+          <span className="label-muted self-end">Capacity replaced (MVA)</span>
+          <NumberInput label="Capacity replaced (MVA)" value={load.replacedMva} onChange={(n) => set({ replacedMva: n })} boxed className="w-full" />
           <span className="block text-[11px] text-gray-400">0 for an additional transformer</span>
         </label>
-        <label className="block">
-          <span className="label-muted mb-1 block">Power factor</span>
-          <NumberInput label="Load power factor" value={load.powerFactor} onChange={(n) => set({ powerFactor: n })} className="w-full border-gray-200" />
+        <label className="row-span-3 grid grid-rows-subgrid gap-y-1">
+          <span className="label-muted self-end">Power factor</span>
+          <NumberInput label="Load power factor" value={load.powerFactor} onChange={(n) => set({ powerFactor: n })} boxed className="w-full" />
         </label>
       </div>
       {f ? (

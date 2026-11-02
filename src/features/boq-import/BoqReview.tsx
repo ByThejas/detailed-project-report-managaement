@@ -158,7 +158,7 @@ export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewP
         </label>
       </div>
 
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto relative">
         <table className={`w-full text-[13px] ${electrical ? 'min-w-[1120px]' : 'min-w-[880px]'}`}>
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs text-gray-500">

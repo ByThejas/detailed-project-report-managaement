@@ -582,13 +582,17 @@ export function GenerateDprPanel({ dpr, estimate, documents, onGoTo, onChange, c
         <CardHeader id="dpr-outline-title" title="What goes into the DPR" subtitle="Annexures 5, 7, 8 and 9 are your attached files; enclose them after the Word pages when printing" />
         <ol className="divide-y divide-gray-100">
           {parts.map((p) => (
-            <li key={p.title} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-2 text-[13px]">
-              {p.ok ? <CheckCircle2 className="h-4 w-4 text-emerald-600" aria-label="Ready" /> : <Circle className="h-4 w-4 text-amber-500" aria-label="Not ready" />}
-              <span className="num w-6 text-gray-400">{p.no}</span>
-              <span className="min-w-[12rem] flex-1 text-gray-900">{p.title}</span>
-              <span className="text-xs text-gray-500">{p.note}</span>
-              {!p.ok && (
-                <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => onGoTo(p.step)}>
+            <li key={p.title} className="flex min-h-11 items-center gap-x-3 px-4 py-2 text-[13px]">
+              {p.ok ? <CheckCircle2 className="h-4 w-4 shrink-0 text-emerald-600" aria-label="Ready" /> : <Circle className="h-4 w-4 shrink-0 text-amber-500" aria-label="Not ready" />}
+              <span className="num w-6 shrink-0 text-gray-400">{p.no}</span>
+              <span className="flex min-w-0 flex-1 flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
+                <span className="text-gray-900">{p.title}</span>
+                <span className="text-xs text-gray-500">{p.note}</span>
+              </span>
+              {p.ok ? (
+                <span className="w-12 shrink-0" aria-hidden />
+              ) : (
+                <button type="button" className="btn-ghost h-7 w-12 shrink-0 px-2 text-xs" onClick={() => onGoTo(p.step)}>
                   Fix <ArrowRight className="h-3 w-3" aria-hidden />
                 </button>
               )}

@@ -145,7 +145,7 @@ export function RatePricingCard({ estimate, onChange }: { estimate: Estimate; on
               {onlyMissing ? 'Every item in this part already has a rate. Untick “Only items without a rate” to check them against the catalog.' : 'No items in this part.'}
             </p>
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto relative">
               <table className="w-full min-w-[960px]" aria-label="Rate suggestions">
                 <thead className="text-xs text-gray-500">
                   <tr className="border-b border-gray-100">

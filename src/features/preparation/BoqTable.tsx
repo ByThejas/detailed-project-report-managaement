@@ -50,7 +50,7 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
   const add = () => onChange({ ...estimate, lines: [...estimate.lines, newLine(section, `${meta.prefix}${lines.length + 1}`)] });
   const setMisc = (key: TotalKey, n: number) => onChange({ ...estimate, misc: { ...estimate.misc, [key]: n } });
 
-  const th = 'px-2 py-2 font-medium';
+  const th = 'whitespace-nowrap px-2 py-2 font-medium';
   const titleId = `${section}-boq-title`;
 
   return (
@@ -66,7 +66,7 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
           </button>
         }
       />
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto relative">
         <table className={`w-full text-[13px] ${electrical ? 'min-w-[1180px]' : 'min-w-[760px]'}`}>
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs text-gray-500">
@@ -105,7 +105,7 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
                       aria-label="Item number"
                       value={l.code}
                       onChange={(e) => patch(l.id, { code: e.target.value })}
-                      className="num h-7 w-14 rounded border border-transparent bg-transparent px-1 text-gray-600 hover:border-gray-200 focus:border-accent-500 focus:bg-white focus:outline-none"
+                      className="num -ml-[5px] h-7 w-14 rounded border border-transparent bg-transparent px-1 text-gray-600 hover:border-gray-200 focus:border-accent-500 focus:bg-white focus:outline-none"
                     />
                   </td>
                   <td className="px-2 py-1.5">
@@ -116,37 +116,37 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
                       placeholder="Describe the item"
                       onChange={(e) => patch(l.id, { description: e.target.value })}
                       style={{ fieldSizing: 'content' } as CSSProperties}
-                      className="block min-h-[2.75rem] w-full min-w-[16rem] resize-y rounded border border-transparent bg-transparent px-1.5 py-1 leading-snug text-gray-900 hover:border-gray-200 focus:border-accent-500 focus:bg-white focus:outline-none"
+                      className="-ml-[7px] block min-h-[2.75rem] w-[calc(100%+7px)] min-w-[16rem] resize-y rounded border border-transparent bg-transparent px-1.5 py-1 leading-snug text-gray-900 hover:border-gray-200 focus:border-accent-500 focus:bg-white focus:outline-none"
                     />
-                    {l.source && <p className="px-1.5 text-xs text-gray-400">From {l.source}</p>}
-                    {l.rateRef && <p className="px-1.5 text-xs text-emerald-700">Rates: {l.rateRef}</p>}
-                    {noRate && <p className="px-1.5 text-xs text-amber-700">Rate needed</p>}
+                    {l.source && <p className="text-xs text-gray-400">From {l.source}</p>}
+                    {l.rateRef && <p className="text-xs text-emerald-700">Rates: {l.rateRef}</p>}
+                    {noRate && <p className="text-xs text-amber-700">Rate needed</p>}
                   </td>
                   <td className="px-2 py-1.5">
                     <input
                       aria-label={`Unit of ${l.code}`}
                       value={l.unit}
                       onChange={(e) => patch(l.id, { unit: e.target.value })}
-                      className="h-7 w-14 rounded border border-transparent bg-transparent px-1 text-gray-600 hover:border-gray-200 focus:border-accent-500 focus:bg-white focus:outline-none"
+                      className="-ml-[5px] h-7 w-14 rounded border border-transparent bg-transparent px-1 text-gray-600 hover:border-gray-200 focus:border-accent-500 focus:bg-white focus:outline-none"
                     />
                   </td>
                   <td className="px-2 py-1.5 text-right">
-                    <NumberInput label={`Quantity of ${l.code}`} value={l.qty} onChange={(qty) => patch(l.id, { qty })} />
+                    <NumberInput label={`Quantity of ${l.code}`} value={l.qty} onChange={(qty) => patch(l.id, { qty })} className="-mr-[7px] w-24" />
                   </td>
                   <td className="px-2 py-1.5 text-right">
-                    <NumberInput label={`${electrical ? 'Supply rate' : 'Rate'} of ${l.code}`} value={l.supplyRate} onChange={(supplyRate) => patch(l.id, { supplyRate })} className="w-28" />
+                    <NumberInput label={`${electrical ? 'Supply rate' : 'Rate'} of ${l.code}`} value={l.supplyRate} onChange={(supplyRate) => patch(l.id, { supplyRate })} className="-mr-[7px] w-28" />
                   </td>
-                  <td className="num px-2 py-2 text-right text-gray-900">{rupees(a.supply)}</td>
+                  <td className="num px-2 py-1.5 text-right leading-7 text-gray-900">{rupees(a.supply)}</td>
                   {electrical && (
                     <>
                       <td className="px-2 py-1.5 text-right">
-                        <NumberInput label={`Erection rate of ${l.code}`} value={l.erectionRate} onChange={(erectionRate) => patch(l.id, { erectionRate })} />
+                        <NumberInput label={`Erection rate of ${l.code}`} value={l.erectionRate} onChange={(erectionRate) => patch(l.id, { erectionRate })} className="-mr-[7px] w-24" />
                       </td>
-                      <td className="num px-2 py-2 text-right text-gray-900">{rupees(a.erection)}</td>
+                      <td className="num px-2 py-1.5 text-right leading-7 text-gray-900">{rupees(a.erection)}</td>
                       <td className="px-2 py-1.5 text-right">
-                        <NumberInput label={`Testing rate of ${l.code}`} value={l.testingRate} onChange={(testingRate) => patch(l.id, { testingRate })} />
+                        <NumberInput label={`Testing rate of ${l.code}`} value={l.testingRate} onChange={(testingRate) => patch(l.id, { testingRate })} className="-mr-[7px] w-24" />
                       </td>
-                      <td className="num px-2 py-2 text-right text-gray-900">{rupees(a.testing)}</td>
+                      <td className="num px-2 py-1.5 text-right leading-7 text-gray-900">{rupees(a.testing)}</td>
                     </>
                   )}
                   <td className="py-1.5 pr-3 text-right">
@@ -193,15 +193,15 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
                 <>
                   <td />
                   <td className="px-2 py-1 text-right">
-                    <NumberInput label={`${meta.miscLabel} supply amount`} value={estimate.misc[single] ?? 0} onChange={(n) => setMisc(single, n)} className="w-28" />
+                    <NumberInput label={`${meta.miscLabel} supply amount`} value={estimate.misc[single] ?? 0} onChange={(n) => setMisc(single, n)} className="-mr-[7px] w-28" />
                   </td>
                   <td />
                   <td className="px-2 py-1 text-right">
-                    <NumberInput label={`${meta.miscLabel} erection amount`} value={estimate.misc[erectionKey] ?? 0} onChange={(n) => setMisc(erectionKey, n)} />
+                    <NumberInput label={`${meta.miscLabel} erection amount`} value={estimate.misc[erectionKey] ?? 0} onChange={(n) => setMisc(erectionKey, n)} className="-mr-[7px] w-24" />
                   </td>
                   <td />
                   <td className="px-2 py-1 text-right">
-                    <NumberInput label={`${meta.miscLabel} testing amount`} value={estimate.misc[testingKey] ?? 0} onChange={(n) => setMisc(testingKey, n)} />
+                    <NumberInput label={`${meta.miscLabel} testing amount`} value={estimate.misc[testingKey] ?? 0} onChange={(n) => setMisc(testingKey, n)} className="-mr-[7px] w-24" />
                   </td>
                 </>
               ) : (
@@ -212,7 +212,7 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
                       label={meta.miscLabel}
                       value={estimate.misc[single] ?? 0}
                       onChange={(n) => setMisc(single, n)}
-                      className="w-28"
+                      className="-mr-[7px] w-28"
                     />
                   </td>
                 </>

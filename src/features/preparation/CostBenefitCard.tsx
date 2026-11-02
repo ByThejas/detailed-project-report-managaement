@@ -87,12 +87,12 @@ function KptclBcrCard({ e, f, onChange, capacity }: { e: Estimate; f: Financials
       </dl>
       <div className="grid gap-x-6 gap-y-3 px-4 py-3 text-[13px] sm:grid-cols-2 lg:grid-cols-5">
         {INPUT_FIELDS.map((x) => (
-          <label key={x.key} className="block">
-            <span className="label-muted block">
+          <label key={x.key} className="row-span-3 grid grid-rows-subgrid gap-y-1">
+            <span className="label-muted self-end">
               {x.label}
               {x.unit && <span className="text-gray-400"> ({x.unit})</span>}
             </span>
-            <NumberInput label={x.label} value={inputs[x.key]} onChange={(n) => set({ [x.key]: n })} className={`w-full border-gray-200 ${x.key === 'addedMva' && !inputs.addedMva ? 'border-amber-300' : ''}`} />
+            <NumberInput label={x.label} value={inputs[x.key]} onChange={(n) => set({ [x.key]: n })} boxed warn={x.key === 'addedMva' && !inputs.addedMva} className="w-full" />
             <span className="block text-[11px] leading-snug text-gray-400">{x.hint}</span>
           </label>
         ))}
@@ -126,7 +126,7 @@ function KptclBcrCard({ e, f, onChange, capacity }: { e: Estimate; f: Financials
           </dl>
           <details className="border-t border-gray-200 px-4 py-3 text-[13px]">
             <summary className="cursor-pointer text-gray-700">Year-wise schedule (goes into annexure 6 of the DPR)</summary>
-            <div className="mt-2 overflow-x-auto">
+            <div className="mt-2 overflow-x-auto relative">
               <table className="w-full min-w-[720px] text-xs">
                 <thead className="text-gray-500">
                   <tr>
@@ -221,7 +221,7 @@ function ManualBenefitsCard({ e, onChange }: { e: Estimate; onChange: (e: Estima
       <div className="space-y-3 px-4 py-3 text-[13px]">
         <label className="flex items-center gap-1 text-gray-600">
           Discount rate %
-          <NumberInput label="Discount rate %" value={f.discountRatePct} onChange={(n) => set({ discountRatePct: n })} className="w-16 border-gray-200" />
+          <NumberInput label="Discount rate %" value={f.discountRatePct} onChange={(n) => set({ discountRatePct: n })} boxed className="w-16" />
         </label>
         <div>
           <p className="label-muted mb-1.5">Benefit by year, Rs lakh</p>
@@ -229,7 +229,7 @@ function ManualBenefitsCard({ e, onChange }: { e: Estimate; onChange: (e: Estima
             {benefits.map((b, i) => (
               <label key={i} className="flex flex-col text-[11px] text-gray-500">
                 Year {i + 1}
-                <NumberInput label={`Benefit year ${i + 1}`} value={b} onChange={(n) => setYear(i, n)} className="w-full border-gray-200" />
+                <NumberInput label={`Benefit year ${i + 1}`} value={b} onChange={(n) => setYear(i, n)} boxed className="w-full" />
               </label>
             ))}
           </div>

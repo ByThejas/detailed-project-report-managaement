@@ -276,7 +276,7 @@ export function InitializationPage() {
                 </Field>
               </Section>
 
-              <div className="flex flex-col-reverse gap-2 rounded-b-lg border-t border-gray-200 bg-gray-50 px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
+              <div className="flex flex-col-reverse gap-2 rounded-b-lg bg-gray-50 px-4 py-3 sm:flex-row sm:justify-end sm:px-6">
                 <button type="button" className="btn-secondary" onClick={() => reset(DEFAULTS)}>
                   Clear
                 </button>

@@ -17,8 +17,8 @@ const PAGE_SIZE = 10;
 
 function FilterSelect({ label, value, onChange, options }: { label: string; value: string; onChange: (v: string) => void; options: readonly string[] }) {
   return (
-    <div className="relative">
-      <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} className="input w-auto max-w-[190px] appearance-none truncate pr-7">
+    <div className="relative min-w-[8.5rem] flex-1 sm:min-w-0 sm:flex-none">
+      <select aria-label={label} value={value} onChange={(e) => onChange(e.target.value)} className="input w-full appearance-none truncate pr-7 sm:w-auto sm:max-w-[190px]">
         <option value="">{`All ${label.toLowerCase()}s`}</option>
         {options.map((o) => (
           <option key={o} value={o}>
@@ -165,7 +165,7 @@ export function DprRegisterCard({ rows }: { rows: DprRow[] }) {
               }
             />
           ) : (
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto relative">
               <table className="w-full min-w-[960px] text-[13px]">
                 <thead>
                   <tr className="border-b border-gray-200 text-left text-xs text-gray-500">
@@ -197,7 +197,7 @@ export function DprRegisterCard({ rows }: { rows: DprRow[] }) {
                       <td className="px-4 py-2.5">
                         <div className="flex items-center gap-2">
                           <ProgressBar value={r.progress} label={`${r.id} progress`} className="flex-1" />
-                          <span className="num w-8 text-right text-xs text-gray-500">{r.progress}%</span>
+                          <span className="num w-9 shrink-0 text-right text-xs text-gray-500">{r.progress}%</span>
                         </div>
                       </td>
                     </tr>
