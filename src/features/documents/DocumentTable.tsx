@@ -1,10 +1,10 @@
-import { Fragment, useMemo, useRef, useState } from 'react';
-import { ChevronRight, Paperclip, Search, X } from 'lucide-react';
+import { Fragment, useMemo, useRef, useState, type ReactNode } from 'react';
+import { ChevronRight, Paperclip, Search, Trash2, X } from 'lucide-react';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { Pagination } from '@/components/ui/Pagination';
 import type { DocumentGroup, DocumentSpec } from './catalog';
-import { filesOf, isLocked, statusOf } from './state';
+import { filesOf, statusOf } from './state';
 import type { DocStatus, DprDocuments } from './types';
 
 const PAGE_SIZE = 15;
@@ -19,15 +19,19 @@ interface DocumentTableProps {
   onAdd: (spec: DocumentSpec, files: File[]) => void;
   onRemove: (spec: DocumentSpec, index: number) => void;
   onNotApplicable: (spec: DocumentSpec, value: boolean) => void;
+  /** Set for documents added to this DPR, which can be taken off again while they have no files. */
+  onRemoveDocument?: (spec: DocumentSpec) => void;
+  /** Shown under the table, e.g. the form to add a document. */
+  footer?: ReactNode;
+  emptyText?: string;
 }
 
-export function DocumentTable({ group, docs, onAdd, onRemove, onNotApplicable }: DocumentTableProps) {
+export function DocumentTable({ group, docs, onAdd, onRemove, onNotApplicable, onRemoveDocument, footer, emptyText = 'No results' }: DocumentTableProps) {
   const [filter, setFilter] = useState('');
   const [page, setPage] = useState(1);
   const [open, setOpen] = useState<string | null>(null);
   const picker = useRef<HTMLInputElement>(null);
   const target = useRef<DocumentSpec | null>(null);
-  const locked = isLocked(docs);
 
   const rows = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -123,8 +127,7 @@ export function DocumentTable({ group, docs, onAdd, onRemove, onNotApplicable }:
                         type="button"
                         className="btn-ghost h-7 w-7 px-0"
                         aria-label={`Add files to ${spec.name}`}
-                        title={locked ? 'Submitted: files can no longer be changed' : 'Add files'}
-                        disabled={locked}
+                        title="Add files"
                         onClick={() => {
                           target.current = spec;
                           picker.current?.click();
@@ -148,7 +151,7 @@ export function DocumentTable({ group, docs, onAdd, onRemove, onNotApplicable }:
                                 <span className="min-w-0 truncate text-gray-800">
                                   {f.name} <span className="text-gray-400">· {formatSize(f.size)}</span>
                                 </span>
-                                {!locked && (
+                                {(
                                   <button type="button" aria-label={`Remove ${f.name}`} className="text-gray-400 hover:text-rose-600" onClick={() => onRemove(spec, i)}>
                                     <X className="h-3.5 w-3.5" />
                                   </button>
@@ -157,13 +160,18 @@ export function DocumentTable({ group, docs, onAdd, onRemove, onNotApplicable }:
                             ))}
                           </ul>
                         )}
-                        {spec.requirement === 'Optional' && files.length === 0 && !locked && (
+                        {spec.requirement === 'Optional' && files.length === 0 && (
                           <button
                             type="button"
                             className="mt-2 text-xs font-medium text-accent-600 hover:underline"
                             onClick={() => onNotApplicable(spec, status !== 'N/A')}
                           >
                             {status === 'N/A' ? 'Mark as applicable' : 'Mark as not applicable'}
+                          </button>
+                        )}
+                        {onRemoveDocument && files.length === 0 && (
+                          <button type="button" className="ml-4 mt-2 inline-flex items-center gap-1 text-xs font-medium text-rose-700 hover:underline" onClick={() => onRemoveDocument(spec)}>
+                            <Trash2 className="h-3 w-3" aria-hidden /> Remove this document
                           </button>
                         )}
                       </td>
@@ -175,13 +183,14 @@ export function DocumentTable({ group, docs, onAdd, onRemove, onNotApplicable }:
             {visible.length === 0 && (
               <tr>
                 <td colSpan={6} className="px-4 py-8 text-center text-gray-500">
-                  No results
+                  {group.documents.length ? 'No results' : emptyText}
                 </td>
               </tr>
             )}
           </tbody>
         </table>
       </div>
+      {footer}
       <Pagination alwaysShow page={current} pageCount={pageCount} total={rows.length} pageSize={PAGE_SIZE} onPage={setPage} />
     </Card>
   );

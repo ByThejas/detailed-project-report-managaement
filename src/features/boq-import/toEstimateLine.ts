@@ -21,6 +21,7 @@ export function toEstimateLine(item: ParsedItem, read: BoqReadResult): EstimateL
     erectionRate: multi ? item.erectionRate : 0,
     testingRate: multi ? item.testingRate : 0,
     source: item.srRef ? `${where} · SR ${item.srRef}` : where,
+    ...(item.srCode ? { srCode: item.srCode } : {}),
   };
 }
 

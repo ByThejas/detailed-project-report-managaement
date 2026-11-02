@@ -99,6 +99,8 @@ export interface RateSuggestion {
   /** Child rates in another unit (per tonne, per tonne-metre…) that need a quantity basis and were not added. */
   notApplied: CatalogChildRate[];
   unitMatches: boolean;
+  /** The line names this item by its SoR code. */
+  exact?: boolean;
 }
 
 /** Child rates that apply per unit of the line, and those that need another basis. */
@@ -171,3 +173,22 @@ export function suggestionFor(item: CatalogItem, line: Pick<EstimateLine, 'unit'
 
 /** Where a rate came from, shown under the BOQ line. */
 export const rateRefOf = (s: RateSuggestion) => `SoR 2023-24 · ${s.item.sheet} ${s.item.code}${s.item.sr ? ` · ${s.item.sr}` : ''}`;
+
+const CIVIL_SHEET = /civil/i;
+
+/**
+ * The catalog item a BOQ line names by its own SoR code ("SR Code" column), when there is exactly one
+ * such item in the right part of the catalog and its unit agrees. These are the only matches the app
+ * ticks for the user; everything matched by wording waits for a tick.
+ */
+export function exactCodeMatch(index: RateIndex, line: Pick<EstimateLine, 'unit' | 'section' | 'srCode'>): RateSuggestion | null {
+  const code = line.srCode?.trim().replace(/^(sr|sor)\s*/i, '');
+  if (!code) return null;
+  const civil = line.section === 'civil' || line.section === 'lineCivil';
+  const found = index.items.filter((i) => i.code === code && i.rate !== null && SHEETS[line.section](i.sheet) && (!civil || CIVIL_SHEET.test(i.sheet)));
+  const item = found.find((i) => i.sheet === 'By code') ?? (found.length === 1 ? found[0] : undefined);
+  if (!item) return null;
+  const s = suggestionFor(item, line, 1);
+  const lu = unitKind(line.unit);
+  return s.unitMatches && lu !== 'other' && lu === unitKind(item.unit) ? { ...s, exact: true } : null;
+}

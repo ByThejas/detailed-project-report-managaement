@@ -8,6 +8,7 @@ import { TEMPLATE_SOURCE } from '@/features/preparation/template';
 import { sectionLabel } from '@/features/boq-import/toEstimateLine';
 import { contentGaps, type DprContent } from './content';
 import { pertProblems } from './pert';
+import { openBlockers, type CrossCheck } from './crossChecks';
 
 /** The steps of DPR preparation, in order. The last one generates the DPR. */
 export const STEPS = [
@@ -27,9 +28,11 @@ export interface Gap {
 }
 
 /** Everything that keeps the DPR a draft, grouped by the step where it is fixed. */
-export function dprChecklist(e: Estimate, docs: DprDocuments, content: DprContent): Gap[] {
+export function dprChecklist(e: Estimate, docs: DprDocuments, content: DprContent, checks: CrossCheck[] = []): Gap[] {
   const gaps: Gap[] = [];
   for (const key of PREPARATION_INPUTS) {
+    // Optional inputs (e.g. the TCCM proposal) don't keep the DPR a draft.
+    if (ALL_DOCUMENTS.find((d) => d.key === key)?.requirement !== 'Mandatory') continue;
     if (statusOf(docs, key) === 'Awaiting') gaps.push({ step: 'inputs', label: `document: ${ALL_DOCUMENTS.find((d) => d.key === key)?.name ?? key}` });
   }
   const noRate = linesMissingRates(e);
@@ -43,10 +46,11 @@ export function dprChecklist(e: Estimate, docs: DprDocuments, content: DprConten
   if (!hasBcrInputs(e.financials)) gaps.push({ step: 'finance', label: e.financials?.method === 'manual' ? 'yearly benefits for the BCR' : 'BCR inputs (additional MVA)' });
   for (const p of pertProblems(content.pert)) gaps.push({ step: 'schedule', label: `PERT: ${p}` });
   for (const g of contentGaps(content, hasLineWorks(e))) gaps.push({ step: 'text', label: `text: ${g}` });
+  for (const c of openBlockers(checks, content.acks)) gaps.push({ step: c.step, label: `mismatch: ${c.message}` });
   return gaps;
 }
 
 /** The checklist as plain labels, for the DRAFT cover. */
-export function dprGaps(e: Estimate, docs: DprDocuments, content: DprContent): string[] {
-  return dprChecklist(e, docs, content).map((g) => g.label);
+export function dprGaps(e: Estimate, docs: DprDocuments, content: DprContent, checks: CrossCheck[] = []): string[] {
+  return dprChecklist(e, docs, content, checks).map((g) => g.label);
 }

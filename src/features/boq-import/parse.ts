@@ -43,6 +43,7 @@ export function roleOf(label: string): ColumnRole | null {
   if (isRate) return `${kindOf(l) ?? 'supply'}Rate` as ColumnRole;
   if (isAmount) return `${kindOf(l) ?? 'supply'}Amount` as ColumnRole;
   if (/\bqty\b|quantit/.test(l)) return 'qty';
+  if (/\b(sr|sor|ssr)\s*code\b/.test(l)) return 'srCode';
   if (/\b(sr|sor|ssr)\s*(ref|item|reference)|schedule of rates|\bsr\s*(page|pg)/.test(l)) return 'srRef';
   if (/descr|particular|item of work|name of (the )?(item|material|work|equipment)|specification/.test(l)) return 'description';
   if (/\b(unit|units|uom)\b/.test(l)) return 'unit';
@@ -339,6 +340,7 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
       erectionRate: rates.erection,
       testingRate: rates.testing,
       srRef: text(get(cells, 'srRef')) || undefined,
+      srCode: text(get(cells, 'srCode')) || undefined,
       issues,
     };
     if (code) {

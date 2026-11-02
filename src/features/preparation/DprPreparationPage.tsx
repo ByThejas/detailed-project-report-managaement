@@ -48,6 +48,8 @@ import { useEstimate, useSaveEstimate } from "./api";
 import { BoqTable } from "./BoqTable";
 import { RatePricingCard } from "@/features/rates/RatePricingCard";
 import { CostBenefitCard } from "./CostBenefitCard";
+import { LoadDataCard } from "./LoadDataCard";
+import { crossChecks } from "@/features/dpr-document/crossChecks";
 import {
   GenerateDprPanel,
   ReportTextPanel,
@@ -477,7 +479,9 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
     e.lines.some((l) => l.section === "dismantling");
   const missingRates = linesMissingRates(e);
   const lineWorks = hasLineWorks(e);
-  const checklist = dprChecklist(e, docs, contentOf(dpr, e));
+  const abstracts = Object.values(reads.data ?? {}).flat().flatMap((r) => r.abstracts ?? []);
+  const checks = crossChecks(dpr, e, contentOf(dpr, e), abstracts);
+  const checklist = dprChecklist(e, docs, contentOf(dpr, e), checks);
   const ready = checklist.length === 0;
   const stepDone = (step: StepKey) =>
     step === "generate" ? ready : !checklist.some((g) => g.step === step);
@@ -705,6 +709,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
           aria-labelledby="tab-finance"
           className="space-y-4"
         >
+          <LoadDataCard dpr={dpr} e={e} onChange={change} />
           <CostBenefitCard e={e} onChange={change} capacity={dpr.capacity} />
         </div>
       )}
@@ -715,7 +720,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
       )}
       {tab === "text" && (
         <div role="tabpanel" id="panel-text" aria-labelledby="tab-text">
-          <ReportTextPanel dpr={dpr} estimate={e} onChange={change} />
+          <ReportTextPanel dpr={dpr} estimate={e} onChange={change} documents={docs} />
         </div>
       )}
       {tab === "generate" && (
@@ -724,6 +729,8 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
             dpr={dpr}
             estimate={e}
             documents={docs}
+            checks={checks}
+            onChange={change}
             onGoTo={setTab}
           />
         </div>

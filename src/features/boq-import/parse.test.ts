@@ -36,6 +36,7 @@ describe('roleOf', () => {
     ['T&C Rate', 'testingRate'],
     ['Supply Amount', 'supplyAmount'],
     ['Erection Amount', 'erectionAmount'],
+    ['SR Code', 'srCode'],
   ])('%s -> %s', (label, role) => expect(roleOf(label)).toBe(role));
 
   it('names columns like Excel', () => {

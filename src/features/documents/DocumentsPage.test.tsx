@@ -34,9 +34,10 @@ describe('Documents', () => {
     await pickDpr('channa');
     const summary = screen.getByRole('region', { name: 'Document summary' });
     expect(within(summary).getByText('Not ready').parentElement).toHaveTextContent(String(ALL_DOCUMENTS.length));
-    expect(screen.getAllByRole('table')).toHaveLength(3);
+    // Core, statutory, compensation, and the DPR's own additional documents.
+    expect(screen.getAllByRole('table')).toHaveLength(4);
     const core = screen.getByRole('region', { name: 'Core documents' });
-    expect(within(core).getAllByRole('row')).toHaveLength(15 + 1);
+    expect(within(core).getAllByRole('row')).toHaveLength(14 + 1);
     expect(within(core).getByText('Earth-Mat Design').closest('tr')).toHaveTextContent('R&D');
     expect(screen.getByRole('button', { name: 'Submit to Consultant' })).toBeDisabled();
   });
@@ -71,23 +72,38 @@ describe('Documents', () => {
     expect(within(summary).getByText('N/A').parentElement).toHaveTextContent('1');
   });
 
-  it('submits to the consultant only after every mandatory document has a file, then locks', async () => {
+  it('submits to the consultant once every mandatory document has a file, then still allows changes and an update', async () => {
     seed([row()]);
     renderAt('/documents?dpr=DPR%2FPEE%2F2026%2F0001');
     await screen.findByRole('region', { name: 'Core documents' });
     const submit = screen.getByRole('button', { name: 'Submit to Consultant' });
     expect(submit).toBeDisabled();
-    expect(screen.getByText(/8 mandatory documents still needed/)).toBeInTheDocument();
+    expect(screen.getByText(/7 mandatory documents still needed/)).toBeInTheDocument();
 
     for (const d of ALL_DOCUMENTS.filter((x) => x.requirement === 'Mandatory')) await attach(d.name);
     expect(submit).toBeEnabled();
 
     await userEvent.click(submit);
     await userEvent.click(await screen.findByRole('button', { name: 'Yes, submit' }));
-    expect(await screen.findByText(/Files can no longer be changed/)).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: 'Submit to Consultant' })).toBeDisabled();
-    expect(screen.getByRole('button', { name: 'Add files to TAC' })).toBeDisabled();
+    expect(await screen.findByText(/You can still add, remove or change documents/)).toBeInTheDocument();
     const summary = screen.getByRole('region', { name: 'Document summary' });
-    expect(within(summary).getByText('Pending').parentElement).toHaveTextContent('8');
+    expect(within(summary).getByText('Pending').parentElement).toHaveTextContent('7');
+    const again = screen.getByRole('button', { name: 'Send update to Consultant' });
+    expect(again).toBeDisabled();
+
+    // A document of its own for this DPR, then a file in it.
+    const extra = screen.getByRole('region', { name: 'Additional documents' });
+    await userEvent.type(within(extra).getByRole('textbox', { name: 'New document name' }), 'Forest NOC');
+    await userEvent.click(within(extra).getByRole('button', { name: 'Add document' }));
+    expect(await within(extra).findByText('Forest NOC')).toBeInTheDocument();
+    await attach('Forest NOC');
+    const changes = await screen.findByRole('list', { name: 'Changes since the last submission' });
+    expect(changes).toHaveTextContent('Added document “Forest NOC”');
+    expect(changes).toHaveTextContent('Added Forest NOC.pdf to Forest NOC');
+    expect(again).toBeEnabled();
+    await userEvent.click(again);
+    await userEvent.click(await screen.findByRole('button', { name: 'Yes, send update' }));
+    expect(await screen.findByText(/2 submissions/)).toBeInTheDocument();
+    expect(screen.queryByRole('list', { name: 'Changes since the last submission' })).not.toBeInTheDocument();
   });
 });

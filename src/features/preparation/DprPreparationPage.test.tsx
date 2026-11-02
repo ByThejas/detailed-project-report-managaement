@@ -22,16 +22,16 @@ describe('DPR Preparation', () => {
     expect(screen.queryByRole('table')).not.toBeInTheDocument();
   });
 
-  it('builds the BOQ from the DPR capacity and lists the ten input documents', async () => {
+  it('builds the BOQ from the DPR capacity and lists the nine input documents', async () => {
     seed([KOGALI]);
     renderAt(url);
     const inputs = await screen.findByRole('region', { name: 'Input documents' });
-    expect(within(inputs).getAllByRole('listitem')).toHaveLength(10);
+    expect(within(inputs).getAllByRole('listitem')).toHaveLength(9);
     expect(within(inputs).getByText('TCCM Proposal')).toBeInTheDocument();
-    expect(within(inputs).getAllByText('Missing')).toHaveLength(10);
+    expect(within(inputs).getAllByText('Missing')).toHaveLength(9);
     expect(screen.getByText('In preparation')).toBeInTheDocument();
     expect(screen.queryByText(/This estimate was built for/)).not.toBeInTheDocument();
-    expect(within(screen.getByRole('region', { name: 'Estimate summary' })).getByText('0 / 10')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Estimate summary' })).getByText('0 / 9')).toBeInTheDocument();
 
     await openStep('Estimate');
     const electrical = screen.getByRole('region', { name: 'Electrical BOQ (Part A)' });
@@ -43,13 +43,13 @@ describe('DPR Preparation', () => {
     seed([KOGALI]);
     sampleStore.saveDocuments(KOGALI.id, {
       files: { 'single-line-diagram-sld': [{ name: 'kogali-sld.pdf', size: 10, addedAt: '2026-10-31T09:00:00.000Z' }] },
-      notApplicable: ['bill-of-quantity-civil'],
+      notApplicable: ['scada-sas-details'],
     });
     renderAt(url);
     const inputs = await screen.findByRole('region', { name: 'Input documents' });
     expect(within(inputs).getByText('kogali-sld.pdf')).toBeInTheDocument();
     expect(within(inputs).getByText('Not applicable')).toBeInTheDocument();
-    expect(within(screen.getByRole('region', { name: 'Estimate summary' })).getByText('2 / 10')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Estimate summary' })).getByText('2 / 9')).toBeInTheDocument();
   });
 
   it('adds the dismantling estimate and Abstract-II for a brownfield DPR only', async () => {
@@ -122,7 +122,8 @@ describe('DPR Preparation', () => {
     const panel = screen.getByRole('region', { name: 'Generate full DPR' });
     expect(within(panel).getByRole('button', { name: 'Generate draft DPR (Word)' })).toBeInTheDocument();
     const missing = screen.getByRole('region', { name: 'Still missing' });
-    expect(within(missing).getByText('TCCM Proposal')).toBeInTheDocument();
+    expect(within(missing).getByText('TCCM Proceedings')).toBeInTheDocument();
+    expect(within(missing).queryByText('TCCM Proposal')).not.toBeInTheDocument();
     expect(within(missing).getByText('Existing capacity')).toBeInTheDocument();
     expect(within(missing).getByText('BCR inputs (additional MVA)')).toBeInTheDocument();
     const outline = screen.getByRole('region', { name: 'What goes into the DPR' });
@@ -178,5 +179,36 @@ describe('DPR Preparation', () => {
     const dialog = screen.getByRole('alertdialog', { name: 'Confirm reset' });
     await userEvent.click(within(dialog).getByRole('button', { name: 'Yes, reset' }));
     expect(screen.queryByRole('alertdialog')).not.toBeInTheDocument();
+  });
+
+  it('works out loading from the load data, feeds the BCR, and checks the DPR agrees with itself', async () => {
+    seed([KOGALI]);
+    renderAt(url);
+    await openStep('Cost-benefit');
+    const load = screen.getByRole('region', { name: 'Load data' });
+    await userEvent.type(within(load).getByRole('textbox'), '2x8 MVA');
+    await userEvent.type(within(load).getByRole('spinbutton', { name: 'Recorded peak load (MW)' }), '5.8');
+    await userEvent.clear(within(load).getByRole('spinbutton', { name: 'Capacity replaced (MVA)' }));
+    await userEvent.type(within(load).getByRole('spinbutton', { name: 'Capacity replaced (MVA)' }), '16');
+    expect(within(load).getByRole('status', { name: 'Loading factor' })).toHaveTextContent('Now: 0.42 on 16 MVA');
+    await userEvent.click(within(load).getByRole('button', { name: 'Use 24 MVA for the BCR' }));
+    expect(screen.getByRole('spinbutton', { name: 'Additional load after enhancement' })).toHaveValue(24);
+    await userEvent.click(within(load).getByRole('button', { name: 'Fill section 01 facts' }));
+
+    await openStep('Report text');
+    expect(screen.getByDisplayValue('2×8 MVA — recorded peak load 5.8 MW, loading factor 0.42 (within capacity)')).toBeInTheDocument();
+    const mva = screen.getByDisplayValue(/^24 MVA \(2×20 MVA\)/);
+    await userEvent.clear(mva);
+    await userEvent.type(mva, '2x12.5 MVA');
+
+    await openStep('Generate DPR');
+    const checks = screen.getByRole('region', { name: 'Consistency checks' });
+    expect(within(checks).getByText('“MVA added” mentions 12.5 MVA, but the DPR is for 2x20 MVA.')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Still missing' })).getByText(/MVA added” mentions 12.5 MVA/)).toBeInTheDocument();
+    await userEvent.click(within(checks).getByRole('button', { name: 'It is correct…' }));
+    await userEvent.type(within(checks).getByRole('textbox', { name: 'Why this is correct' }), 'old units named on purpose');
+    await userEvent.click(within(checks).getByRole('button', { name: 'Accept' }));
+    expect(within(checks).getByText('Accepted: old units named on purpose')).toBeInTheDocument();
+    expect(within(screen.getByRole('region', { name: 'Version history' })).getByText(/No DPR generated yet/)).toBeInTheDocument();
   });
 });

@@ -1,5 +1,6 @@
 import type { DprContent } from '@/features/dpr-document/content';
 import type { Financials } from './finance';
+import type { LoadData } from './load';
 
 /**
  * Part A electrical and Part B civil make Abstract-I (the substation); dismantling (brownfield only) makes
@@ -38,6 +39,8 @@ export interface EstimateLine {
   source?: string;
   /** Schedule-of-rates item the rates were taken from, e.g. "SoR 2023-24 · By code 1.10 · p25". */
   rateRef?: string;
+  /** SoR item code the BOQ itself names (an "SR Code" column), used to take that exact catalog item. */
+  srCode?: string;
 }
 
 export interface Estimate {
@@ -70,6 +73,8 @@ export interface Estimate {
   dismantlingStatutory?: number;
   /** Yearly benefits and discount rate for B/C ratio, IRR and payback. */
   financials?: Financials;
+  /** Recorded load at the station, for the loading factor and the BCR's added MVA. */
+  load?: LoadData;
   /** Text and project details for the Word DPR. */
   document?: DprContent;
   /** Capacity the template was built for, so we can tell when the DPR changed. */

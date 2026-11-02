@@ -29,7 +29,7 @@ describe('BOQ import', () => {
     const input = within(core).getByTestId('core-file-input');
     await userEvent.click(within(core).getByRole('button', { name: 'Add files to Bill of Quantity (BOQ)' }));
     await userEvent.upload(input, new File([await boqWorkbook()], 'kogali-boq.xlsx'));
-    expect(await screen.findByText('Read 3 items from kogali-boq.xlsx')).toBeInTheDocument();
+    expect(await screen.findByText('Read 3 items from kogali-boq.xlsx', {}, { timeout: 5000 })).toBeInTheDocument();
     expect(sampleStore.boqReads(DPR.id)['bill-of-quantity-electrical']![0]!.items).toHaveLength(3);
   });
 

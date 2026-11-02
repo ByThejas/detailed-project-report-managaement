@@ -12,7 +12,10 @@ import { BOQ_DOCUMENTS, useReadBoqFiles, useRemoveBoqRead } from '@/features/boq
 import { useDprDocuments, useUpdateDocuments } from './api';
 import { DOCUMENT_GROUPS } from './catalog';
 import { DocumentTable } from './DocumentTable';
-import { addFiles, canSubmit, filesOf, countStatuses, isLocked, missingMandatory, removeFile, setNotApplicable, submit } from './state';
+import { RequestDraftsCard } from './RequestDraftsCard';
+import { deleteFile, putFiles } from '@/lib/fileStore';
+import { addExtraDocument, addFiles, canSubmit, changesSinceSubmit, extraSpecs, filesOf, countStatuses, missingMandatory, removeExtraDocument, removeFile, setNotApplicable, submit } from './state';
+import { AddDocumentForm } from './AddDocumentForm';
 import { EMPTY_DOCUMENTS } from './types';
 
 const MAX_FILE_BYTES = 25 * 1024 * 1024;
@@ -41,6 +44,8 @@ function SummaryStrip({ counts }: { counts: ReturnType<typeof countStatuses> }) 
   );
 }
 
+const when = (iso: string) => new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+
 export function DocumentsPage() {
   const { dprs, active, choose: setDpr } = useActiveDpr();
   const toast = useToast();
@@ -54,7 +59,8 @@ export function DocumentsPage() {
   const readBoq = useReadBoqFiles(activeId);
   const removeRead = useRemoveBoqRead(activeId);
   const docs = documents.data ?? EMPTY_DOCUMENTS;
-  const locked = isLocked(docs);
+  const submitted = Boolean(docs.submittedAt);
+  const changes = changesSinceSubmit(docs);
   const missing = missingMandatory(docs);
 
   const choose = (id: string) => {
@@ -68,6 +74,8 @@ export function DocumentsPage() {
     if (tooBig.length) toast({ title: 'File too large', description: `${tooBig.map((f) => f.name).join(', ')} is over 25 MB.`, tone: 'error' });
     if (!ok.length) return;
     const added = ok.map((f) => ({ name: f.name, size: f.size, addedAt: new Date().toISOString() }));
+    // Keep the files themselves in this browser, for the printed DPR pack.
+    void putFiles(activeId, spec.key, ok);
     update.mutate((d) => addFiles(d, spec.key, added), {
       onSuccess: () => toast({ title: `${ok.length === 1 ? 'File' : `${ok.length} files`} added`, description: spec.name }),
     });
@@ -95,6 +103,7 @@ export function DocumentsPage() {
   const remove = (spec: { key: string }, index: number) => {
     const name = filesOf(docs, spec.key)[index]?.name;
     update.mutate((d) => removeFile(d, spec.key, index));
+    if (name && !filesOf(docs, spec.key).some((f, i) => i !== index && f.name === name)) void deleteFile(activeId, spec.key, name);
     if (name && BOQ_DOCUMENTS[spec.key] && !filesOf(docs, spec.key).some((f, i) => i !== index && f.name === name)) removeRead.mutate({ docKey: spec.key, fileName: name });
   };
 
@@ -102,7 +111,7 @@ export function DocumentsPage() {
     update.mutate(submit, {
       onSuccess: () => {
         setConfirming(false);
-        toast({ title: 'Submitted to consultant', description: activeId });
+        toast({ title: submitted ? 'Update sent to consultant' : 'Submitted to consultant', description: activeId });
       },
     });
   };
@@ -136,10 +145,23 @@ export function DocumentsPage() {
     body = (
       <>
         <SummaryStrip counts={countStatuses(docs)} />
-        {locked && (
-          <p role="status" className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-[13px] text-gray-700">
-            Submitted to the consultant on {new Date(docs.submittedAt!).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' })}. Files can no longer be changed.
-          </p>
+        {submitted && (
+          <div role="status" className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-[13px] text-gray-700">
+            <p>
+              Last sent to the consultant on {when(docs.submittedAt!)}
+              {(docs.submissions?.length ?? 0) > 1 && ` (${docs.submissions!.length} submissions)`}. You can still add, remove or change documents and send an update.
+            </p>
+            {changes.length > 0 && (
+              <>
+                <p className="mt-1.5 font-medium text-gray-900">Changed since then</p>
+                <ul aria-label="Changes since the last submission" className="mt-0.5 list-disc pl-5 text-xs">
+                  {changes.map((c, i) => (
+                    <li key={i}>{c.text}</li>
+                  ))}
+                </ul>
+              </>
+            )}
+          </div>
         )}
         {DOCUMENT_GROUPS.map((group) => (
           <DocumentTable
@@ -151,24 +173,42 @@ export function DocumentsPage() {
             onNotApplicable={(spec, value) => update.mutate((d) => setNotApplicable(d, spec, value))}
           />
         ))}
+        <DocumentTable
+          key={`${activeId}-extra`}
+          group={{ key: 'extra', title: 'Additional documents', documents: extraSpecs(docs) }}
+          docs={docs}
+          onAdd={attach}
+          onRemove={remove}
+          onNotApplicable={(spec, value) => update.mutate((d) => setNotApplicable(d, spec, value))}
+          onRemoveDocument={(spec) => update.mutate((d) => removeExtraDocument(d, spec.key))}
+          emptyText="Documents this DPR needs beyond the standard list, e.g. a forest NOC or a railway crossing approval. Add one below."
+          footer={
+            <AddDocumentForm
+              existing={[...DOCUMENT_GROUPS.flatMap((g) => g.documents), ...extraSpecs(docs)].map((d) => d.name)}
+              onAdd={(name, source) => update.mutate((d) => addExtraDocument(d, name, source), { onSuccess: () => toast({ title: 'Document added', description: name }) })}
+            />
+          }
+        />
+        {active && <RequestDraftsCard dpr={active} docs={docs} />}
 
         <div className="flex flex-wrap items-center gap-3 pt-2">
           {confirming ? (
             <div role="alertdialog" aria-label="Confirm submission" className="flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 text-[13px]">
-              <span className="text-gray-700">Send these documents to the consultant? You won’t be able to change files afterwards.</span>
+              <span className="text-gray-700">{submitted ? `Send an update with ${changes.length} ${changes.length === 1 ? 'change' : 'changes'} to the consultant?` : 'Send these documents to the consultant? You can still change them and send an update later.'}</span>
               <button type="button" className="btn-secondary" onClick={() => setConfirming(false)}>
                 Cancel
               </button>
               <button type="button" className="btn-primary" onClick={send} disabled={update.isPending}>
-                Yes, submit
+                {submitted ? 'Yes, send update' : 'Yes, submit'}
               </button>
             </div>
           ) : (
             <>
               <button type="button" className="btn-primary" disabled={!canSubmit(docs)} onClick={() => setConfirming(true)}>
-                Submit to Consultant
+                {submitted ? 'Send update to Consultant' : 'Submit to Consultant'}
               </button>
-              {!locked && missing.length > 0 && (
+              {submitted && !changes.length && <p className="text-xs text-gray-500">Nothing has changed since the last submission.</p>}
+              {missing.length > 0 && (
                 <p className="text-xs text-gray-500">
                   {missing.length} mandatory {missing.length === 1 ? 'document' : 'documents'} still needed: {missing.map((m) => m.name).join(', ')}.
                 </p>

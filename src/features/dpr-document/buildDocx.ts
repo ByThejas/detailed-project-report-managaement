@@ -16,6 +16,8 @@ export interface DprDocInput {
   /** Anything still missing. When not empty, the cover is marked DRAFT and lists it. */
   gaps: string[];
   now?: Date;
+  /** Version number, added to the file name. */
+  version?: number;
 }
 
 const inr = (n: number, digits = 2) => new Intl.NumberFormat('en-IN', { minimumFractionDigits: digits, maximumFractionDigits: digits }).format(n);
@@ -476,7 +478,7 @@ export async function downloadDprDocx(input: DprDocInput) {
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
   a.href = url;
-  a.download = `DPR_${input.dpr.id.replace(/\W+/g, '-')}${input.gaps.length ? '_DRAFT' : ''}.docx`;
+  a.download = `DPR_${input.dpr.id.replace(/\W+/g, '-')}${input.version ? `_v${input.version}` : ''}${input.gaps.length ? '_DRAFT' : ''}.docx`;
   document.body.appendChild(a);
   a.click();
   a.remove();

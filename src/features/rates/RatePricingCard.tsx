@@ -6,7 +6,7 @@ import { useToast } from '@/lib/toast';
 import { isMultiRate, type Estimate, type EstimateLine, type EstimateSection } from '@/features/preparation/types';
 import { sectionLabel } from '@/features/boq-import/toEstimateLine';
 import { loadRateCatalog } from './catalog';
-import { buildIndex, suggestRates, rateRefOf, suggestionFor, type RateIndex, type RateSuggestion } from './match';
+import { buildIndex, exactCodeMatch, suggestRates, rateRefOf, suggestionFor, type RateIndex, type RateSuggestion } from './match';
 
 const rs = (n: number) => formatNumber(Math.round(n * 100) / 100);
 const PRICEABLE: EstimateSection[] = ['electrical', 'civil', 'line', 'lineCivil'];
@@ -42,7 +42,7 @@ export function RatePricingCard({ estimate, onChange }: { estimate: Estimate; on
   const [open, setOpen] = useState(false);
   const [index, setIndex] = useState<RateIndex | null>(null);
   const [failed, setFailed] = useState(false);
-  const [section, setSection] = useState<EstimateSection>('electrical');
+  const [section, setSection] = useState<EstimateSection | 'all'>('all');
   const [onlyMissing, setOnlyMissing] = useState(true);
   const [choices, setChoices] = useState<Record<string, Choice>>({});
 
@@ -58,15 +58,24 @@ export function RatePricingCard({ estimate, onChange }: { estimate: Estimate; on
   }, [open, index]);
 
   const sections = PRICEABLE.filter((s) => estimate.lines.some((l) => l.section === s));
-  const lines = estimate.lines.filter((l) => l.section === section && l.description.trim() && (!onlyMissing || !hasRate(l)));
+  const lines = estimate.lines.filter((l) => PRICEABLE.includes(l.section) && (section === 'all' || l.section === section) && l.description.trim() && (!onlyMissing || !hasRate(l)));
+  const multiCols = section === 'all' ? lines.some((l) => isMultiRate(l.section)) : isMultiRate(section);
   const suggestions = useMemo(() => {
     const out = new Map<string, RateSuggestion[]>();
-    if (index) for (const l of lines) out.set(l.id, suggestRates(index, l, 3));
+    if (index)
+      for (const l of lines) {
+        const exact = exactCodeMatch(index, l);
+        const rest = suggestRates(index, l, 3).filter((x) => x.item.id !== exact?.item.id);
+        out.set(l.id, exact ? [exact, ...rest.slice(0, 2)] : rest);
+      }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [index, section, onlyMissing, estimate.lines]);
 
-  const choiceOf = (id: string): Choice => choices[id] ?? { pick: 0, code: '', apply: false };
+  // Only a line that names its SoR code, with that exact item found, starts ticked.
+  const isExact = (id: string) => Boolean(suggestions.get(id)?.[0]?.exact);
+  const choiceOf = (id: string): Choice => choices[id] ?? { pick: 0, code: '', apply: isExact(id) };
+  const exactCount = lines.filter((l) => isExact(l.id)).length;
   const setChoice = (id: string, patch: Partial<Choice>) => setChoices((c) => ({ ...c, [id]: { ...choiceOf(id), ...patch } }));
   const chosen = (l: EstimateLine): RateSuggestion | null => {
     const c = choiceOf(l.id);
@@ -86,7 +95,7 @@ export function RatePricingCard({ estimate, onChange }: { estimate: Estimate; on
         return { ...l, supplyRate: s.supplyRate, erectionRate: multi ? s.erectionRate : 0, testingRate: multi ? s.testingRate : 0, rateRef: rateRefOf(s) };
       }),
     });
-    toast({ title: `Priced ${byId.size} ${byId.size === 1 ? 'item' : 'items'} from the rate catalog`, description: sectionLabel(section) });
+    toast({ title: `Priced ${byId.size} ${byId.size === 1 ? 'item' : 'items'} from the rate catalog`, description: section === 'all' ? 'All parts' : sectionLabel(section) });
     setChoices({});
   };
 
@@ -95,7 +104,7 @@ export function RatePricingCard({ estimate, onChange }: { estimate: Estimate; on
       <CardHeader
         id="rates-title"
         title="Price from the rate catalog"
-        subtitle="Common SoR 2023-24 (rate_catalog 76): supply, erection and T&C rates. You pick each match; nothing is applied on its own."
+        subtitle="Common SoR 2023-24 (rate_catalog 76): supply, erection and T&C rates. Items whose BOQ names the exact SoR code start ticked; every match by wording waits for your tick. Nothing is applied until you click Apply."
         action={
           <button type="button" className="btn-secondary" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
             <BookOpen className="h-3.5 w-3.5" aria-hidden />
@@ -108,7 +117,8 @@ export function RatePricingCard({ estimate, onChange }: { estimate: Estimate; on
           <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-gray-200 px-4 py-2.5">
             <label className="flex items-center gap-1.5 text-gray-600">
               Part
-              <select className="input h-8 w-auto" value={section} onChange={(ev) => setSection(ev.target.value as EstimateSection)}>
+              <select className="input h-8 w-auto" value={section} onChange={(ev) => setSection(ev.target.value as EstimateSection | 'all')}>
+                <option value="all">All parts</option>
                 {(sections.length ? sections : PRICEABLE).map((s) => (
                   <option key={s} value={s}>
                     {sectionLabel(s)}
@@ -144,7 +154,7 @@ export function RatePricingCard({ estimate, onChange }: { estimate: Estimate; on
                     <th className="py-2 text-left font-medium">Catalog item</th>
                     <th className="py-2 pr-2 text-right font-medium">Supply rate</th>
                     <th className="py-2 pr-2 text-right font-medium">Supply amount</th>
-                    {isMultiRate(section) && (
+                    {multiCols && (
                       <>
                         <th className="py-2 pr-2 text-right font-medium">Erection rate</th>
                         <th className="py-2 pr-2 text-right font-medium">Erection amount</th>
@@ -158,20 +168,21 @@ export function RatePricingCard({ estimate, onChange }: { estimate: Estimate; on
                     const sugg = suggestions.get(l.id) ?? [];
                     const c = choiceOf(l.id);
                     const s = chosen(l);
-                    const differs = s && hasRate(l) && (Math.abs(s.supplyRate - l.supplyRate) > 0.5 || (isMultiRate(section) && Math.abs(s.erectionRate - l.erectionRate) > 0.5));
+                    const differs = s && hasRate(l) && (Math.abs(s.supplyRate - l.supplyRate) > 0.5 || (isMultiRate(l.section) && Math.abs(s.erectionRate - l.erectionRate) > 0.5));
                     return (
                       <tr key={l.id} className="border-b border-gray-100 align-top">
                         <td className="py-2 pl-4">
                           <input type="checkbox" aria-label={`Apply catalog rate to ${l.code || l.description.slice(0, 30)}`} disabled={!s} checked={c.apply && Boolean(s)} onChange={(ev) => setChoice(l.id, { apply: ev.target.checked })} />
                         </td>
                         <td className="max-w-[18rem] py-2 pr-3">
+                          {section === 'all' && <p className="text-[11px] uppercase tracking-wide text-gray-400">{sectionLabel(l.section)}</p>}
                           <p className="line-clamp-3 text-gray-900">
                             <span className="num text-gray-400">{l.code} </span>
                             {l.description}
                           </p>
                           <p className="text-xs text-gray-500">
                             {l.qty} {l.unit}
-                            {hasRate(l) && ` · now ${rs(l.supplyRate)}${isMultiRate(section) ? ` / ${rs(l.erectionRate)} / ${rs(l.testingRate)}` : ''}`}
+                            {hasRate(l) && ` · now ${rs(l.supplyRate)}${isMultiRate(l.section) ? ` / ${rs(l.erectionRate)} / ${rs(l.testingRate)}` : ''}`}
                           </p>
                         </td>
                         <td className="max-w-[24rem] py-2 pr-3">
@@ -183,7 +194,7 @@ export function RatePricingCard({ estimate, onChange }: { estimate: Estimate; on
                           >
                             {sugg.map((x, i) => (
                               <option key={x.item.id} value={i}>
-                                {Math.round(x.score * 100)}% · {x.item.code} · {x.item.item.slice(0, 80)}
+                                {x.exact ? 'Exact SoR code' : `${Math.round(x.score * 100)}%`} · {x.item.code} · {x.item.item.slice(0, 80)}
                               </option>
                             ))}
                             <option value={-1}>SoR code typed by hand…</option>
@@ -209,7 +220,7 @@ export function RatePricingCard({ estimate, onChange }: { estimate: Estimate; on
                         </td>
                         <td className="num py-2 pr-2 text-right">{s ? rs(s.supplyRate) : '—'}</td>
                         <td className="num py-2 pr-2 text-right text-gray-600">{s ? rs(s.supplyRate * l.qty) : '—'}</td>
-                        {isMultiRate(section) && (
+                        {multiCols && (
                           <>
                             <td className="num py-2 pr-2 text-right">{s ? rs(s.erectionRate) : '—'}</td>
                             <td className="num py-2 pr-2 text-right text-gray-600">{s ? rs(s.erectionRate * l.qty) : '—'}</td>
@@ -227,8 +238,17 @@ export function RatePricingCard({ estimate, onChange }: { estimate: Estimate; on
             <div className="flex flex-wrap items-center gap-3 px-4 py-2.5">
               <p className="flex items-start gap-1.5 text-xs text-amber-900">
                 <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-                Matches are by wording. Check each one against the SoR page before applying.
+                {exactCount ? `${exactCount} ${exactCount === 1 ? 'item names its' : 'items name their'} SoR code and ${exactCount === 1 ? 'is' : 'are'} ticked. ` : ''}Other matches are by wording: check each against the SoR page before ticking.
               </p>
+              {exactCount > 0 && (
+                <button
+                  type="button"
+                  className="btn-ghost h-8 text-xs"
+                  onClick={() => setChoices((c) => Object.fromEntries([...Object.entries(c), ...lines.filter((l) => isExact(l.id)).map((l) => [l.id, { pick: 0, code: '', apply: true }])]))}
+                >
+                  Tick all exact-code matches
+                </button>
+              )}
               <button type="button" className="btn-primary ml-auto" disabled={!ticked.length} onClick={apply}>
                 Apply rates to {ticked.length} {ticked.length === 1 ? 'item' : 'items'}
               </button>

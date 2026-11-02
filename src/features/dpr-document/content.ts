@@ -2,6 +2,7 @@ import type { DprRow } from '@/features/reports/types';
 import type { Estimate } from '@/features/preparation/types';
 import { hasLineWorks } from '@/features/preparation/calc';
 import { defaultPert, type PertPlan } from './pert';
+import type { Acknowledgement } from './crossChecks';
 
 /**
  * The DPR's text and facts, laid out like the finished Thyavanige DPR: a cover, "01 Project at a glance",
@@ -93,6 +94,8 @@ export interface DprContent {
   /** "n. Salient features": label and text rows. */
   salient: SalientRow[];
   pert: PertPlan;
+  /** Cross-check blockers the user accepted, with a note why. */
+  acks?: Record<string, Acknowledgement>;
 }
 
 /** Text in [square brackets] is a placeholder still to be written. */
@@ -186,6 +189,7 @@ export const contentOf = (dpr: DprRow, e: Estimate): DprContent => {
     tables: { ...d.tables, ...saved.tables },
     salient: saved.salient ?? d.salient,
     pert: saved.pert ?? d.pert,
+    acks: saved.acks ?? {},
   };
 };
 

@@ -10,6 +10,12 @@ import { useToast } from '@/lib/toast';
 import { ANNEXURES, downloadDprDocx } from './buildDocx';
 import { DETAIL_FIELDS, PLACEHOLDER, applies, contentOf, letteredSections, type DetailKey, type DprContent, type SalientRow, type SectionKey, type SimpleTable, type TableKey } from './content';
 import { STEPS, dprChecklist, type Gap, type StepKey } from './readiness';
+import { openBlockers, type Acknowledgement, type CrossCheck } from './crossChecks';
+import { downloadPdfPack, type PackResult } from './pdfPack';
+import { blobBytes, getFile } from '@/lib/fileStore';
+import { extractFacts, readFileText, type FactSuggestion, type FileText as ReadText } from './extract';
+import { EMPTY_LOAD } from '@/features/preparation/load';
+import { MAX_VERSIONS, diffVersions, listVersions, saveVersion, snapshot, type DprVersion } from './versions';
 
 interface Props {
   dpr: DprRow;
@@ -96,6 +102,124 @@ function SalientEditor({ rows, onChange }: { rows: SalientRow[]; onChange: (rows
   );
 }
 
+/**
+ * Reads the attached files and suggests facts for the DPR. Each suggestion shows its file, page and the
+ * words around it; nothing is filled in until the user clicks Use.
+ */
+function FileFactsCard({ dpr, estimate, documents, onChange }: Props) {
+  const toast = useToast();
+  const [busy, setBusy] = useState(false);
+  const [found, setFound] = useState<FactSuggestion[] | null>(null);
+  const [notes, setNotes] = useState<string[]>([]);
+  const [done, setDone] = useState<Set<string>>(new Set());
+  const content = contentOf(dpr, estimate);
+  const attached = Object.entries(documents.files).flatMap(([key, fs]) => fs.map((f) => ({ key, name: f.name })));
+
+  const scan = async () => {
+    setBusy(true);
+    try {
+      const texts: ReadText[] = [];
+      const missing: string[] = [];
+      for (const a of attached) {
+        const f = await getFile(dpr.id, a.key, a.name);
+        if (!f) {
+          missing.push(`${a.name}: not stored in this browser; attach it again in Documents to scan it`);
+          continue;
+        }
+        const t = await readFileText({ name: f.name, type: f.type, bytes: f.data }, a.key);
+        if (t.note) missing.push(`${a.name}: ${t.note}`);
+        texts.push(t);
+      }
+      setFound(extractFacts(texts));
+      setNotes(missing);
+      setDone(new Set());
+    } catch {
+      toast({ title: 'Could not read the files', tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const current = (s: FactSuggestion): string => {
+    const t = s.target;
+    if (t.kind === 'detail') return content.details[t.key] ?? '';
+    if (t.kind === 'salient') return content.salient.find((r) => r.label === t.label)?.value ?? '';
+    return String(estimate.load?.[t.key] ?? '');
+  };
+  const use = (s: FactSuggestion) => {
+    const t = s.target;
+    if (t.kind === 'detail') onChange({ ...estimate, document: { ...content, details: { ...content.details, [t.key]: s.value } } });
+    else if (t.kind === 'salient') {
+      const has = content.salient.some((r) => r.label === t.label);
+      const salient = has ? content.salient.map((r) => (r.label === t.label ? { ...r, value: s.value } : r)) : [...content.salient, { label: t.label, value: s.value }];
+      onChange({ ...estimate, document: { ...content, salient } });
+    } else {
+      const load = { ...EMPTY_LOAD, ...estimate.load, [t.key]: t.key === 'peakMw' ? Number(s.value) : s.value };
+      onChange({ ...estimate, load });
+    }
+    setDone((d) => new Set(d).add(s.id));
+    toast({ title: `${s.label} filled in`, description: `From ${s.file}${s.page ? `, page ${s.page}` : ''}` });
+  };
+  const shown = (found ?? []).filter((s) => !done.has(s.id) && current(s).trim() !== s.value);
+
+  return (
+    <Card role="region" aria-labelledby="dpr-facts-title">
+      <CardHeader
+        id="dpr-facts-title"
+        title="Suggestions from your files"
+        subtitle="Reads the attached TCCM proceedings, layout/BOM, earthmat and load files for approval, APW code, budget, letters and load. You check each one before it is used."
+        action={
+          <button type="button" className="btn-secondary" onClick={scan} disabled={busy || !attached.length}>
+            {busy ? 'Reading…' : 'Scan attached files'}
+          </button>
+        }
+      />
+      {!attached.length ? (
+        <p className="px-4 py-3 text-[13px] text-gray-500">No files attached yet.</p>
+      ) : found === null ? null : (
+        <div className="text-[13px]">
+          {shown.length ? (
+            <ul className="divide-y divide-gray-100" aria-label="Suggested facts">
+              {shown.map((s) => (
+                <li key={s.id} className="px-4 py-2.5">
+                  <div className="flex flex-wrap items-start gap-2">
+                    <div className="min-w-[16rem] flex-1">
+                      <p className="text-xs text-gray-500">{s.label}</p>
+                      <p className="text-gray-900">{s.value}</p>
+                      {current(s).trim() && <p className="text-xs text-gray-500">Now: {current(s)}</p>}
+                      <p className="mt-0.5 text-xs text-gray-500">
+                        From {s.file}
+                        {s.page ? `, page ${s.page}` : ''}: <q className="italic">{s.snippet}</q>
+                      </p>
+                    </div>
+                    <button type="button" className="btn-secondary h-7 px-2 text-xs" onClick={() => use(s)}>
+                      Use
+                    </button>
+                    <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => setDone((d) => new Set(d).add(s.id))}>
+                      Dismiss
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p role="status" className="px-4 py-3 text-gray-500">
+              No new facts found in the attached files.
+            </p>
+          )}
+          {notes.length > 0 && (
+            <ul className="list-disc border-t border-gray-100 py-2 pl-9 pr-4 text-xs text-amber-800">
+              {notes.map((n) => (
+                <li key={n}>{n}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </Card>
+  );
+}
+
 const GROUPS = [
   { key: 'glance', title: '01 Project at a glance', subtitle: 'Fact rows in section 01. Cost, BCR, IRR and payback are filled in from the estimate.' },
   { key: 'cover', title: 'Cover and page footer', subtitle: 'APW code, jurisdiction, consultant and month, as on the cover' },
@@ -103,7 +227,7 @@ const GROUPS = [
 ] as const;
 
 /** Step 5: everything written by hand, in the order it appears in the DPR. */
-export function ReportTextPanel({ dpr, estimate, onChange }: Omit<Props, 'documents'>) {
+export function ReportTextPanel({ dpr, estimate, onChange, documents }: Omit<Props, 'documents'> & { documents?: DprDocuments }) {
   const { content, save } = useContent(dpr, estimate, onChange);
   const lineWorks = hasLineWorks(estimate);
   const setDetail = (key: DetailKey, value: string) => save({ details: { ...content.details, [key]: value } });
@@ -114,6 +238,7 @@ export function ReportTextPanel({ dpr, estimate, onChange }: Omit<Props, 'docume
 
   return (
     <div className="space-y-4">
+      {documents && <FileFactsCard dpr={dpr} estimate={estimate} documents={documents} onChange={onChange} />}
       {GROUPS.map((grp) => (
         <Card key={grp.key} role="region" aria-labelledby={`dpr-${grp.key}-title`}>
           <CardHeader id={`dpr-${grp.key}-title`} title={grp.title} subtitle={grp.subtitle} />
@@ -200,20 +325,221 @@ function outline(e: Estimate, docs: DprDocuments, content: DprContent, gaps: Gap
   return rows.sort((x, y) => (parseInt(x.no) || 0) - (parseInt(y.no) || 0));
 }
 
+/** One PDF to print or upload: the DPR saved as PDF, then annexures 5, 7, 8 and 9 from the attached files. */
+function PdfPackCard({ dpr, documents, runningTitle }: { dpr: DprRow; documents: DprDocuments; runningTitle?: string }) {
+  const toast = useToast();
+  const [front, setFront] = useState<File | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<PackResult | null>(null);
+  const build = async () => {
+    setBusy(true);
+    try {
+      const r = await downloadPdfPack({
+        dpr,
+        documents,
+        runningTitle,
+        front: front ? await blobBytes(front) : undefined,
+        fileOf: async (key, name) => {
+          const f = await getFile(dpr.id, key, name);
+          return f ? { name: f.name, type: f.type, bytes: f.data } : undefined;
+        },
+      });
+      setResult(r);
+      toast({ title: `PDF pack ready: ${r.pages} pages`, description: r.skipped.length ? `${r.skipped.length} files left out; see the list.` : undefined, tone: r.skipped.length ? 'info' : undefined });
+    } catch {
+      toast({ title: 'Could not build the PDF pack', description: 'Check that the DPR file is a PDF.', tone: 'error' });
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <Card role="region" aria-labelledby="dpr-pack-title">
+      <CardHeader
+        id="dpr-pack-title"
+        title="Print-ready PDF pack"
+        subtitle="The DPR, then annexures 5, 7, 8 and 9 from the attached files, each behind a title page, with page numbers on every page"
+        action={
+          <button type="button" className="btn-secondary" onClick={build} disabled={busy}>
+            {busy ? 'Building…' : 'Build PDF pack'}
+          </button>
+        }
+      />
+      <div className="space-y-2 px-4 py-3 text-[13px]">
+        <label className="block">
+          <span className="label-muted mb-1 block">DPR saved as PDF (optional, goes in front)</span>
+          <input type="file" accept="application/pdf,.pdf" aria-label="DPR saved as PDF" onChange={(ev) => setFront(ev.target.files?.[0] ?? null)} className="text-xs" />
+          <span className="mt-1 block text-xs text-gray-500">Open the generated Word file and use File › Save as › PDF, then choose it here. Without it the pack holds only the annexures.</span>
+        </label>
+        <p className="text-xs text-gray-500">PDFs and images are put in as they are. Other files, such as the BOQ workbook, are named on the title page; save them as PDF and attach that to include them. Files attached before this version, or in another browser, need attaching again.</p>
+        {result && (
+          <div role="status" className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-xs">
+            <p className="text-gray-900">
+              {result.pages} pages. Included: {result.included.length ? result.included.join(', ') : 'no attachments'}.
+            </p>
+            {result.skipped.length > 0 && (
+              <ul className="mt-1 list-disc pl-5 text-amber-800">
+                {result.skipped.map((x) => (
+                  <li key={x.name}>
+                    {x.name}: {x.why}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+/** Every generated DPR, newest first, with what changed from the one before. Any version can be downloaded again. */
+function VersionsCard({ versions, pending }: { versions: DprVersion[]; pending: string[] }) {
+  const toast = useToast();
+  const again = async (v: DprVersion) => {
+    try {
+      await downloadDprDocx({ dpr: v.dpr, estimate: v.estimate, documents: v.documents, content: contentOf(v.dpr, v.estimate), gaps: v.gaps, now: new Date(v.at), version: v.version });
+    } catch {
+      toast({ title: 'Could not rebuild that version', tone: 'error' });
+    }
+  };
+  const when = (iso: string) => new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' });
+  return (
+    <Card role="region" aria-labelledby="dpr-versions-title">
+      <CardHeader id="dpr-versions-title" title="Version history" subtitle={`Each generated DPR is kept in this browser (last ${MAX_VERSIONS}), with what changed from the one before`} />
+      {!versions.length ? (
+        <p className="px-4 py-3 text-[13px] text-gray-500">No DPR generated yet. The first one becomes version 1.</p>
+      ) : (
+        <div className="text-[13px]">
+          <div className="border-b border-gray-100 px-4 py-2.5">
+            <p className="font-medium text-gray-900">Since v{versions.at(-1)!.version}</p>
+            {pending.length ? (
+              <ul aria-label="Changes since the last version" className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-gray-700">
+                {pending.map((c) => (
+                  <li key={c}>{c}</li>
+                ))}
+              </ul>
+            ) : (
+              <p className="text-xs text-gray-500">Nothing has changed.</p>
+            )}
+          </div>
+          <ol className="divide-y divide-gray-100">
+            {[...versions].reverse().map((v, i, arr) => {
+              const prev = arr[i + 1];
+              const changes = prev ? diffVersions(prev, v) : [];
+              return (
+                <li key={v.version} className="px-4 py-2.5">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="font-medium text-gray-900">v{v.version}</span>
+                    <span className="text-xs text-gray-500">{when(v.at)}</span>
+                    <span className="num text-xs text-gray-700">
+                      Rs {v.totalLakhs.toFixed(2)} lakh{v.bcr !== null && ` · BCR ${v.bcr.toFixed(2)}`}
+                    </span>
+                    <span className={`text-xs ${v.gaps.length ? 'text-amber-700' : 'text-emerald-700'}`}>{v.gaps.length ? `Draft, ${v.gaps.length} missing` : 'Complete'}</span>
+                    <button type="button" className="btn-ghost ml-auto h-7 px-2 text-xs" onClick={() => again(v)}>
+                      Download v{v.version}
+                    </button>
+                  </div>
+                  {prev && (
+                    <ul className="mt-1 list-disc space-y-0.5 pl-5 text-xs text-gray-600">
+                      {changes.length ? changes.map((c) => <li key={c}>{c}</li>) : <li>Same as v{prev.version}</li>}
+                    </ul>
+                  )}
+                </li>
+              );
+            })}
+          </ol>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+/** Mismatches between the DPR's parts. A blocker needs fixing, or a note saying why it is right. */
+function ConsistencyCard({ checks, content, onAck, onGoTo }: { checks: CrossCheck[]; content: DprContent; onAck: (acks: Record<string, Acknowledgement>) => void; onGoTo: (s: StepKey) => void }) {
+  const [noting, setNoting] = useState<string | null>(null);
+  const [note, setNote] = useState('');
+  const acks = content.acks ?? {};
+  const open = openBlockers(checks, acks);
+  return (
+    <Card role="region" aria-labelledby="dpr-checks-title">
+      <CardHeader id="dpr-checks-title" title="Consistency checks" subtitle="Capacity, voltage, transformers, section 01 facts, BCR, load data and the workbook's own abstract totals" />
+      {!checks.length ? (
+        <p role="status" className="flex items-center gap-2 px-4 py-3 text-[13px] text-emerald-700">
+          <CheckCircle2 className="h-4 w-4" aria-hidden /> Everything agrees.
+        </p>
+      ) : (
+        <ul className="divide-y divide-gray-100 text-[13px]">
+          {checks.map((c) => {
+            const ack = acks[c.id]?.message === c.message ? acks[c.id] : undefined;
+            const blocking = open.includes(c);
+            return (
+              <li key={c.id} className="px-4 py-2.5">
+                <div className="flex flex-wrap items-start gap-2">
+                  <TriangleAlert className={`mt-0.5 h-4 w-4 shrink-0 ${blocking ? 'text-rose-600' : 'text-amber-500'}`} aria-hidden />
+                  <span className="min-w-[14rem] flex-1 text-gray-900">
+                    <span className="sr-only">{blocking ? 'Blocker: ' : c.severity === 'blocker' ? 'Accepted: ' : 'Warning: '}</span>
+                    {c.message}
+                  </span>
+                  <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => onGoTo(c.step)}>
+                    Fix <ArrowRight className="h-3 w-3" aria-hidden />
+                  </button>
+                  {blocking && noting !== c.id && (
+                    <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => (setNoting(c.id), setNote(''))}>
+                      It is correct…
+                    </button>
+                  )}
+                  {ack && (
+                    <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => onAck(Object.fromEntries(Object.entries(acks).filter(([k]) => k !== c.id)))}>
+                      Undo
+                    </button>
+                  )}
+                </div>
+                {ack && <p className="ml-6 mt-0.5 text-xs text-gray-500">Accepted: {ack.note}</p>}
+                {noting === c.id && (
+                  <div className="ml-6 mt-1.5 flex flex-wrap gap-2">
+                    <input aria-label="Why this is correct" className="input h-8 min-w-[16rem] flex-1 text-xs" placeholder="e.g. replacement: 2×8 MVA out, 2×20 MVA in" value={note} onChange={(ev) => setNote(ev.target.value)} />
+                    <button
+                      type="button"
+                      className="btn-secondary h-8"
+                      disabled={!note.trim()}
+                      onClick={() => {
+                        onAck({ ...acks, [c.id]: { message: c.message, note: note.trim() } });
+                        setNoting(null);
+                      }}
+                    >
+                      Accept
+                    </button>
+                  </div>
+                )}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </Card>
+  );
+}
+
 /** Step 6: one place that says what is missing and generates the full DPR. */
-export function GenerateDprPanel({ dpr, estimate, documents, onGoTo }: Omit<Props, 'onChange'> & { onGoTo: (step: StepKey) => void }) {
+export function GenerateDprPanel({ dpr, estimate, documents, onGoTo, onChange, checks = [] }: Props & { onGoTo: (step: StepKey) => void; checks?: CrossCheck[] }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
   const content = contentOf(dpr, estimate);
-  const checklist = dprChecklist(estimate, documents, content);
+  const checklist = dprChecklist(estimate, documents, content, checks);
   const gaps = checklist.map((g) => g.label);
   const parts = outline(estimate, documents, content, checklist);
+
+  const [versions, setVersions] = useState(() => listVersions(dpr.id));
+  const last = versions.at(-1);
+  const pending = last ? diffVersions(last, snapshot(dpr, estimate, documents, gaps, versions)) : [];
 
   const download = async () => {
     setBusy(true);
     try {
-      await downloadDprDocx({ dpr, estimate, documents, content, gaps });
-      toast(gaps.length ? { title: 'Draft DPR generated', description: `${gaps.length} items still missing; the cover is marked DRAFT.`, tone: 'info' } : { title: 'Full DPR generated', description: dpr.id });
+      const v = snapshot(dpr, estimate, documents, gaps, versions);
+      await downloadDprDocx({ dpr, estimate, documents, content, gaps, version: v.version });
+      setVersions(saveVersion(v));
+      toast(gaps.length ? { title: `Draft DPR v${v.version} generated`, description: `${gaps.length} items still missing; the cover is marked DRAFT.`, tone: 'info' } : { title: `Full DPR v${v.version} generated`, description: dpr.id });
     } catch {
       toast({ title: 'Generation failed', description: 'Please try again.', tone: 'error' });
     } finally {
@@ -271,6 +597,12 @@ export function GenerateDprPanel({ dpr, estimate, documents, onGoTo }: Omit<Prop
         </ol>
       </Card>
 
+      <PdfPackCard dpr={dpr} documents={documents} runningTitle={content.details.runningTitle} />
+
+      <VersionsCard versions={versions} pending={pending} />
+
+      <ConsistencyCard checks={checks} content={content} onAck={(acks) => onChange({ ...estimate, document: { ...content, acks } })} onGoTo={onGoTo} />
+
       {gaps.length > 0 && (
         <Card role="region" aria-labelledby="dpr-missing-title">
           <CardHeader id="dpr-missing-title" title="Still missing" subtitle="Grouped by the step where you fix it" />
@@ -288,7 +620,7 @@ export function GenerateDprPanel({ dpr, estimate, documents, onGoTo }: Omit<Prop
                   </div>
                   <ul className="list-disc space-y-0.5 pl-5 text-xs text-gray-700 sm:columns-2">
                     {items.map((g) => (
-                      <li key={g.label}>{g.label.replace(/^(text|document|PERT): /, '')}</li>
+                      <li key={g.label}>{g.label.replace(/^(text|document|PERT|mismatch): /, '')}</li>
                     ))}
                   </ul>
                 </div>

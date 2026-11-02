@@ -37,6 +37,8 @@ export interface ParsedItem {
   testingRate: number;
   /** Schedule-of-rates reference written next to the item, e.g. "(V1/Pg15/2.2.3)". */
   srRef?: string;
+  /** SoR item code in its own column ("SR Code"), e.g. "1.10". */
+  srCode?: string;
   issues: Issue[];
 }
 
@@ -119,7 +121,8 @@ export type ColumnRole =
   | 'supplyAmount'
   | 'erectionAmount'
   | 'testingAmount'
-  | 'srRef';
+  | 'srRef'
+  | 'srCode';
 
 export interface BoqReadResult {
   fileName: string;

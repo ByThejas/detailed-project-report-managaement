@@ -1,5 +1,5 @@
 import catalog from '@/data/rateCatalog.json';
-import { buildIndex, highestKv, rateRefOf, suggestRates, suggestionFor, tokens, unitKind } from './match';
+import { buildIndex, exactCodeMatch, highestKv, rateRefOf, suggestRates, suggestionFor, tokens, unitKind } from './match';
 import type { RateCatalog } from './types';
 
 const index = buildIndex(catalog as RateCatalog);
@@ -49,5 +49,15 @@ describe('voltage class', () => {
     const s = suggestRates(index, { description: 'Power transformer 8 MVA, 110/11 kV, Dyn11, OLTC, ONAN/ONAF, with RTCC panel, first oil filling and 10% spare oil', unit: 'No', section: 'electrical' }, 3);
     expect(s.map((x) => x.item.code)).toContain('1.13');
     expect(index.items.some((i) => /8 MVA/.test(i.item) && /110/.test(i.item) && /11 kV/.test(i.item))).toBe(false);
+  });
+
+  it('takes an item by the SoR code the BOQ names only when the code, part and unit all agree', () => {
+    const pt = exactCodeMatch(index, { unit: 'No', section: 'electrical', srCode: '1.10' });
+    expect(pt?.exact).toBe(true);
+    expect(pt?.supplyRate).toBe(31_247_000);
+    // Wrong unit, a civil line with an electrical code, or no code: nothing is taken.
+    expect(exactCodeMatch(index, { unit: 'cum', section: 'electrical', srCode: '1.10' })).toBeNull();
+    expect(exactCodeMatch(index, { unit: 'No', section: 'civil', srCode: '1.10' })).toBeNull();
+    expect(exactCodeMatch(index, { unit: 'No', section: 'electrical' })).toBeNull();
   });
 });

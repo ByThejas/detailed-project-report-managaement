@@ -10,8 +10,31 @@ export interface DprDocuments {
   files: Record<string, DocFile[]>;
   /** Optional documents marked "not applicable" for this DPR. */
   notApplicable: string[];
-  /** Set once the DPR's documents have gone to the consultant. */
+  /** When the documents last went to the consultant. Files can still be changed afterwards. */
   submittedAt?: string;
+  /** Extra optional documents added for this DPR only, beyond the standard list. */
+  extra?: ExtraDocument[];
+  /** What changed since the last submission, so the next one can say so. */
+  changes?: DocChange[];
+  /** Earlier submissions, oldest first. */
+  submissions?: Submission[];
+}
+
+export interface ExtraDocument {
+  key: string;
+  name: string;
+  source: string;
+}
+
+export interface DocChange {
+  at: string;
+  text: string;
+}
+
+export interface Submission {
+  at: string;
+  /** What changed since the submission before it; empty for the first. */
+  changes: string[];
 }
 
 export const EMPTY_DOCUMENTS: DprDocuments = { files: {}, notApplicable: [] };
