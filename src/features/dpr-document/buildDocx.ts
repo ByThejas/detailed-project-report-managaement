@@ -2,7 +2,7 @@ import type * as Docx from 'docx';
 import type { DprRow } from '@/features/reports/types';
 import type { DprDocuments } from '@/features/documents/types';
 import { filesOf } from '@/features/documents/state';
-import { abstractOf, generalAbstract, lineAmounts, sectionTotals, type AbstractRow } from '@/features/preparation/calc';
+import { SECTION_KEYS, abstractOf, generalAbstract, hasLineWorks, lineAmounts, sectionTotals, type AbstractRow } from '@/features/preparation/calc';
 import { DEFAULT_FINANCIALS, summariseFinancials } from '@/features/preparation/finance';
 import type { Estimate, EstimateSection } from '@/features/preparation/types';
 import { DETAIL_FIELDS, SECTIONS, type DprContent } from './content';
@@ -40,6 +40,7 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
   const f = e.financials ?? DEFAULT_FINANCIALS;
   const fin = summariseFinancials(g.total, f);
   const brownfield = e.lines.some((l) => l.section === 'dismantling');
+  const lineWorks = hasLineWorks(e);
   const bcr = fin.bcr === null ? 'Not calculated' : fin.bcr.toFixed(2);
   const irr = fin.irr === null ? 'Not calculated' : `${(fin.irr * 100).toFixed(1)}%`;
   const payback = fin.discountedPayback === null ? 'Not calculated' : `${fin.discountedPayback} years`;
@@ -90,7 +91,7 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
     );
   const singleRateTable = (section: EstimateSection, miscLabel: string) => {
     const { subTotal, total } = sectionTotals(e);
-    const key = section === 'civil' ? 'civil' : 'dismantling';
+    const key = SECTION_KEYS[section].supply;
     const lines = e.lines.filter((l) => l.section === section);
     return table(
       ['Sl. No.', 'Particulars', 'Unit', 'Qty', 'Rate (Rs)', 'Amount (Rs)'],
@@ -101,6 +102,21 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
         ['', 'Total amount', '', '', '', inr(total[key])],
       ],
       { numeric: [3, 4, 5], widths: [8, 50, 8, 9, 12, 13], boldRows: [lines.length + 2] },
+    );
+  };
+  const lineSupplyTable = () => {
+    const { subTotal, total } = sectionTotals(e);
+    const lines = e.lines.filter((l) => l.section === 'line');
+    const labour = (l: (typeof lines)[number]) => lineAmounts(l).erection + lineAmounts(l).testing;
+    return table(
+      ['Sl. No.', 'Description', 'Unit', 'Qty', 'Material rate', 'Material amount', 'Labour rate', 'Labour amount'],
+      [
+        ...lines.map((l) => [l.code, l.description, l.unit, qty(l.qty), inr(l.supplyRate), inr(lineAmounts(l).supply), inr(l.erectionRate + l.testingRate), inr(labour(l))]),
+        ['', 'Sub total', '', '', '', inr(subTotal.lineSupply), '', inr(subTotal.lineErection + subTotal.lineTesting)],
+        ['', 'Miscellaneous', '', '', '', inr(e.misc.lineSupply ?? 0), '', inr((e.misc.lineErection ?? 0) + (e.misc.lineTesting ?? 0))],
+        ['', 'Total', '', '', '', inr(total.lineSupply), '', inr(total.lineErection + total.lineTesting)],
+      ],
+      { numeric: [3, 4, 5, 6, 7], widths: [7, 37, 8, 7, 10, 12, 9, 10], boldRows: [lines.length + 2] },
     );
   };
   const filesFor = (key: string | null) => (key ? filesOf(documents, key).map((x) => x.name) : []);
@@ -195,6 +211,7 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
       ['Existing capacity', content.details.existingCapacity],
       ['Electrical works (Part A)', `Rs ${inr((total.supply + total.erection + total.testing) / 100_000)} lakh before loading and GST`],
       ['Civil works (Part B)', `Rs ${inr(total.civil / 100_000)} lakh before loading and GST`],
+      ...(lineWorks ? ([['Line works', `Rs ${inr(g.line)} lakh including loading, GST and charges`]] as [string, string][]) : []),
       ...(brownfield ? ([['Dismantling (Abstract-II)', `Rs ${inr(g.dismantling)} lakh`]] as [string, string][]) : []),
       ['Earthing', filesFor('earth-mat-design').length ? 'Earth mat design report attached (Annexure F)' : 'Earth mat design report not yet attached'],
       ['Rates', content.details.priceBasis],
@@ -222,16 +239,18 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
     table(
       ['Sl. No.', 'Particulars', 'Amount in lakhs'],
       [
-        ['1', `Part A capital works: ${dpr.project}`, inr(g.capital)],
-        ...(brownfield ? [['2', 'Dismantling of the existing equipment', inr(g.dismantling)]] : []),
+        ['1', `Substation capital works: ${dpr.project}`, inr(g.capital)],
+        ...(lineWorks ? [['2', 'Line works', inr(g.line)]] : []),
+        ...(brownfield ? [[String(lineWorks ? 3 : 2), 'Dismantling of the existing equipment', inr(g.dismantling)]] : []),
         ['', 'Total project cost', inr(g.total)],
       ],
-      { numeric: [2], widths: [10, 70, 20], boldRows: [brownfield ? 2 : 1] },
+      { numeric: [2], widths: [10, 70, 20], boldRows: [1 + Number(lineWorks) + Number(brownfield)] },
     ),
     subheading('Abstract-I: capital works'),
     abstractTable(abstractOf(e, 'I')),
     subheading('Part B: civil works'),
     singleRateTable('civil', 'Rounding off'),
+    ...(lineWorks ? [subheading('Abstract: line works'), abstractTable(abstractOf(e, 'line')), subheading('Line works: supply and erection'), lineSupplyTable(), subheading('Line works: civil portion'), singleRateTable('lineCivil', 'Miscellaneous and unforeseen')] : []),
     ...(brownfield ? [subheading('Abstract-II: dismantling'), abstractTable(abstractOf(e, 'II')), subheading('Dismantling: decommissioning part'), singleRateTable('dismantling', 'Miscellaneous')] : []),
   ];
 

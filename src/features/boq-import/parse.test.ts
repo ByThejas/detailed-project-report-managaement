@@ -110,7 +110,8 @@ describe('parseBoq', () => {
     expect(cable).toMatchObject({ qty: 100, unit: 'Mtr' });
     expect(warningsOf(cable!).map((w) => w.message)).toEqual(['Quantity read from “100 Mtr” as 100']);
     expect(openErrors(earthing!).map((e) => e.message)).toEqual(['Quantity “LS” is not a number']);
-    expect(warningsOf(lamp!)[0]!.message).toBe('Supply amount in the file is 70,000, but qty × rate is 76,376');
+    expect(warningsOf(lamp!)[0]!.message).toBe('Supply amount in the file is 70,000, but qty × rate is 76,376. The file’s amount is used (rate 17,500)');
+    expect(lamp!.supplyRate).toBe(17_500);
     expect(openErrors(plates!)[0]!.message).toBe('Quantity -2 is negative');
     expect(again!.supplyRate).toBe(0);
     expect(warningsOf(again!).map((w) => w.message)).toEqual(['Supply rate “quote” is not a number; left blank', 'Item number 4 also appears on row 5']);

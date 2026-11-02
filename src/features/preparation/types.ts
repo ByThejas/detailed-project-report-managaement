@@ -1,10 +1,28 @@
 import type { DprContent } from '@/features/dpr-document/content';
 import type { Financials } from './finance';
 
-/** Part A electrical and Part B civil make Abstract-I; dismantling (brownfield only) makes Abstract-II. */
-export type EstimateSection = 'electrical' | 'civil' | 'dismantling';
+/**
+ * Part A electrical and Part B civil make Abstract-I (the substation); dismantling (brownfield only) makes
+ * Abstract-II. Line works (e.g. a LILO line to the substation) have their own supply/labour and civil sheets
+ * and their own abstract, as in the Thyavanige estimate.
+ */
+export type EstimateSection = 'electrical' | 'civil' | 'dismantling' | 'line' | 'lineCivil';
 
-/** One BOQ line. Electrical lines use all three rates; civil and dismantling lines use only `supplyRate` as the rate. */
+/** Sections priced with supply, erection and T&C rates. The others use only `supplyRate` as the rate. */
+export const MULTI_RATE_SECTIONS: readonly EstimateSection[] = ['electrical', 'line'];
+export const isMultiRate = (s: EstimateSection) => MULTI_RATE_SECTIONS.includes(s);
+
+/** Statutory charges and compensation on a line-works abstract, Rs. */
+export interface LineWorksCharges {
+  /** PTCC, Electrical Inspectorate etc. */
+  statutory: number;
+  /** Forest clearance, tree and crop cut compensation. */
+  forestCompensation: number;
+  /** Land, corridor and tower-foot area compensation. */
+  landCompensation: number;
+}
+
+/** One BOQ line. Multi-rate sections use all three rates; the others use only `supplyRate` as the rate. */
 export interface EstimateLine {
   id: string;
   section: EstimateSection;
@@ -23,13 +41,29 @@ export interface EstimateLine {
 export interface Estimate {
   lines: EstimateLine[];
   /** "Miscellaneous and unforeseen" / rounding amounts in Rs, as on the estimate sheets. */
-  misc: { supply: number; erection: number; testing: number; civil: number; dismantling?: number };
-  /** Area-specific loading on the basic rate, % (5 in the sample). */
+  misc: {
+    supply: number;
+    erection: number;
+    testing: number;
+    civil: number;
+    dismantling?: number;
+    lineSupply?: number;
+    lineErection?: number;
+    lineTesting?: number;
+    lineCivil?: number;
+  };
+  /** Area-specific loading on the basic rate, % (5 in the Kogali sample, 3 in Thyavanige). */
   areaLoadingPct: number;
   /** GST on basic rate + loading, % (18 in the sample). */
   gstPct: number;
-  /** PTCC, inspectorate, forest, compensation etc., Rs. */
+  /** PTCC, inspectorate etc. on Abstract-I, Rs. */
   statutoryCharges: number;
+  /** Forest / tree / crop compensation on Abstract-I, Rs. Usually 0 for a substation. */
+  forestCompensation?: number;
+  /** Land / corridor / tower-foot compensation on Abstract-I, Rs. */
+  landCompensation?: number;
+  /** Charges on the line-works abstract. */
+  lineCharges?: LineWorksCharges;
   /** Statutory charges on the dismantling estimate (Abstract-II), Rs. 0 in the sample. */
   dismantlingStatutory?: number;
   /** Yearly benefits and discount rate for B/C ratio, IRR and payback. */

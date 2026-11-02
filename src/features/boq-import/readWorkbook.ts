@@ -33,7 +33,18 @@ export async function workbookToGrids(buffer: ArrayBuffer): Promise<SheetGrid[]>
       if (row.hidden) hiddenRows.push(r);
       const cells: Cell[] = [];
       row.eachCell({ includeEmpty: true }, (cell, c) => {
-        cells[c - 1] = cell.isMerged && cell.master.address !== cell.address ? null : cellToPlain(cell.value);
+        if (cell.isMerged && cell.master.address !== cell.address) {
+          cells[c - 1] = null;
+          return;
+        }
+        // ExcelJS drops a saved formula result of 0 from `value` but keeps it on the cell model.
+        const value = cell.value as unknown;
+        const modelResult = (cell.model as { result?: unknown } | undefined)?.result;
+        const withResult =
+          value && typeof value === 'object' && ('formula' in value || 'sharedFormula' in value) && (value as { result?: unknown }).result === undefined && modelResult !== undefined
+            ? { ...(value as object), result: modelResult }
+            : value;
+        cells[c - 1] = cellToPlain(withResult);
       });
       rows[r - 1] = Array.from(cells, (c) => c ?? null);
     });
@@ -57,6 +68,8 @@ export async function readBoqWorkbook(buffer: ArrayBuffer, fileName: string, sec
       items: [],
       skipped: [],
       totals: [],
+      misc: [],
+      abstracts: [],
       failure: 'The file could not be opened as an Excel workbook. Save it as .xlsx in Excel and attach it again.',
     };
   }

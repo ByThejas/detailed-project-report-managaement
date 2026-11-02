@@ -29,7 +29,13 @@ import type { DprRow } from "@/features/reports/types";
 import { formatNumber } from "@/lib/format";
 import { useToast } from "@/lib/toast";
 import { BOQ_DOCUMENTS, useBoqReads } from "@/features/boq-import/api";
-import { BoqReview, type ImportMode } from "@/features/boq-import/BoqReview";
+import { BoqReview } from "@/features/boq-import/BoqReview";
+import {
+  applyImport,
+  sectionLabel,
+  type ImportMode,
+  type ImportPlan,
+} from "@/features/boq-import/toEstimateLine";
 import { openErrors, warningsOf } from "@/features/boq-import/parse";
 import { isReadableBoq } from "@/features/boq-import/readWorkbook";
 import type { BoqReadResult } from "@/features/boq-import/types";
@@ -49,13 +55,14 @@ const TABS = [
 import {
   abstractOf,
   generalAbstract,
+  hasLineWorks,
   linesMissingRates,
   type AbstractPart,
 } from "./calc";
 import { exportEstimate } from "./exportEstimate";
 import { NumberInput } from "./NumberInput";
 import { buildTemplate } from "./template";
-import type { Estimate, EstimateLine } from "./types";
+import type { Estimate } from "./types";
 
 const lakhs = (n: number) => formatNumber(Math.round(n * 100) / 100);
 const STATUS_TONE: Record<DocStatus, BadgeTone> = {
@@ -76,7 +83,10 @@ function SummaryStrip({ collected, e }: { collected: number; e: Estimate }) {
   const g = generalAbstract(e);
   const items = [
     { label: "Input documents", value: `${collected} / ${INPUT_SPECS.length}` },
-    { label: "Capital works (Abstract-I), Rs lakh", value: lakhs(g.capital) },
+    { label: "Substation works (Abstract-I), Rs lakh", value: lakhs(g.capital) },
+    ...(hasLineWorks(e)
+      ? [{ label: "Line works, Rs lakh", value: lakhs(g.line) }]
+      : []),
     {
       label: "Dismantling (Abstract-II), Rs lakh",
       value: lakhs(g.dismantling),
@@ -85,7 +95,9 @@ function SummaryStrip({ collected, e }: { collected: number; e: Estimate }) {
   ];
   return (
     <section aria-label="Estimate summary">
-      <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-gray-200 bg-gray-200 lg:grid-cols-4">
+      <dl
+        className={`grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-gray-200 bg-gray-200 ${items.length > 4 ? "lg:grid-cols-5" : "lg:grid-cols-4"}`}
+      >
         {items.map(({ label, value }) => (
           <div key={label} className="bg-white px-4 py-3.5">
             <dt className="text-xs text-gray-500">{label}</dt>
@@ -252,6 +264,34 @@ function AbstractTable({
   );
 }
 
+const ABSTRACT_META: Record<AbstractPart, { title: string; subtitle: string }> = {
+  I: { title: "Abstract-I", subtitle: "Substation capital works · Rs lakh" },
+  line: { title: "Abstract: line works", subtitle: "Line supply, erection and civil works · Rs lakh" },
+  II: { title: "Abstract-II", subtitle: "Dismantling · Rs lakh" },
+};
+
+function ChargeInput({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  onChange: (n: number) => void;
+}) {
+  return (
+    <label className="flex items-center gap-1">
+      {label}
+      <NumberInput
+        label={label}
+        value={value}
+        onChange={onChange}
+        className="w-28 border-gray-200"
+      />
+    </label>
+  );
+}
+
 function AbstractCard({
   e,
   part,
@@ -262,17 +302,19 @@ function AbstractCard({
   onChange: (e: Estimate) => void;
 }) {
   const id = `abstract-${part}-title`;
+  const meta = ABSTRACT_META[part];
+  const lc = e.lineCharges ?? {
+    statutory: 0,
+    forestCompensation: 0,
+    landCompensation: 0,
+  };
+  const setLine = (patch: Partial<typeof lc>) =>
+    onChange({ ...e, lineCharges: { ...lc, ...patch } });
   return (
     <Card role="region" aria-labelledby={id}>
-      <CardHeader
-        id={id}
-        title={`Abstract-${part}`}
-        subtitle={
-          part === "I" ? "Capital works · Rs lakh" : "Dismantling · Rs lakh"
-        }
-      />
+      <CardHeader id={id} title={meta.title} subtitle={meta.subtitle} />
       <div className="flex flex-wrap gap-x-6 gap-y-2 border-b border-gray-200 px-4 py-3 text-[13px] text-gray-600">
-        {part === "I" ? (
+        {part === "I" && (
           <>
             <label className="flex items-center gap-1">
               Area loading %
@@ -292,31 +334,57 @@ function AbstractCard({
                 className="w-16 border-gray-200"
               />
             </label>
-            <label className="flex items-center gap-1">
-              Statutory charges (Rs)
-              <NumberInput
-                label="Statutory charges (Rs)"
-                value={e.statutoryCharges}
-                onChange={(n) => onChange({ ...e, statutoryCharges: n })}
-                className="w-28 border-gray-200"
-              />
-            </label>
+            <ChargeInput
+              label="Statutory charges (Rs)"
+              value={e.statutoryCharges}
+              onChange={(n) => onChange({ ...e, statutoryCharges: n })}
+            />
+            <ChargeInput
+              label="Forest / tree / crop compensation (Rs)"
+              value={e.forestCompensation ?? 0}
+              onChange={(n) => onChange({ ...e, forestCompensation: n })}
+            />
+            <ChargeInput
+              label="Land / corridor compensation (Rs)"
+              value={e.landCompensation ?? 0}
+              onChange={(n) => onChange({ ...e, landCompensation: n })}
+            />
           </>
-        ) : (
+        )}
+        {part === "line" && (
           <>
             <span>
               Area loading {e.areaLoadingPct}% and GST {e.gstPct}%, as in
               Abstract-I
             </span>
-            <label className="flex items-center gap-1">
-              Statutory charges (Rs)
-              <NumberInput
-                label="Dismantling statutory charges (Rs)"
-                value={e.dismantlingStatutory ?? 0}
-                onChange={(n) => onChange({ ...e, dismantlingStatutory: n })}
-                className="w-28 border-gray-200"
-              />
-            </label>
+            <ChargeInput
+              label="Line statutory charges (Rs)"
+              value={lc.statutory}
+              onChange={(n) => setLine({ statutory: n })}
+            />
+            <ChargeInput
+              label="Line forest / tree / crop compensation (Rs)"
+              value={lc.forestCompensation}
+              onChange={(n) => setLine({ forestCompensation: n })}
+            />
+            <ChargeInput
+              label="Line land / corridor / tower-foot compensation (Rs)"
+              value={lc.landCompensation}
+              onChange={(n) => setLine({ landCompensation: n })}
+            />
+          </>
+        )}
+        {part === "II" && (
+          <>
+            <span>
+              Area loading {e.areaLoadingPct}% and GST {e.gstPct}%, as in
+              Abstract-I
+            </span>
+            <ChargeInput
+              label="Dismantling statutory charges (Rs)"
+              value={e.dismantlingStatutory ?? 0}
+              onChange={(n) => onChange({ ...e, dismantlingStatutory: n })}
+            />
           </>
         )}
       </div>
@@ -336,9 +404,12 @@ function GeneralAbstractCard({
   const rows = [
     {
       key: "capital",
-      label: "Part A capital works (Abstract-I)",
+      label: "Substation capital works (Abstract-I)",
       lakhs: g.capital,
     },
+    ...(hasLineWorks(e)
+      ? [{ key: "line", label: "Line works", lakhs: g.line }]
+      : []),
     ...(brownfield
       ? [
           {
@@ -390,6 +461,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
     dpr.stream !== "Greenfield" ||
     e.lines.some((l) => l.section === "dismantling");
   const missingRates = linesMissingRates(e);
+  const lineWorks = hasLineWorks(e);
   const ready = dprGaps(e, docs, contentOf(dpr, e)).length === 0;
 
   const download = async () => {
@@ -411,16 +483,11 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
         ?.scrollIntoView?.({ block: "start", behavior: "smooth" }),
     );
   };
-  const importLines = (lines: EstimateLine[], mode: ImportMode) => {
-    const section = reviewing!.section;
-    const kept =
-      mode === "replace"
-        ? e.lines.filter((l) => l.section !== section)
-        : e.lines;
-    change({ ...e, lines: [...kept, ...lines] });
+  const importLines = (plan: ImportPlan, mode: ImportMode) => {
+    change(applyImport(e, plan, mode));
     toast({
-      title: `Imported ${lines.length} items`,
-      description: `${reviewing!.fileName} into ${section === "electrical" ? "Part A" : "Part B"}`,
+      title: `Imported ${plan.lines.length} items`,
+      description: `${reviewing!.fileName} into ${plan.sections.map(sectionLabel).join(", ")}`,
     });
     setReviewing(null);
   };
@@ -555,9 +622,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
             <BoqReview
               key={`${reviewing.fileName}-${reviewing.readAt}`}
               read={reviewing}
-              currentCount={
-                e.lines.filter((l) => l.section === reviewing.section).length
-              }
+              currentLines={e.lines}
               onCancel={() => setReviewing(null)}
               onImport={importLines}
             />
@@ -565,6 +630,13 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
           <BoqTable section="electrical" estimate={e} onChange={change} />
           <BoqTable section="civil" estimate={e} onChange={change} />
           <AbstractCard e={e} part="I" onChange={change} />
+          {lineWorks && (
+            <>
+              <BoqTable section="line" estimate={e} onChange={change} />
+              <BoqTable section="lineCivil" estimate={e} onChange={change} />
+              <AbstractCard e={e} part="line" onChange={change} />
+            </>
+          )}
           {brownfield && (
             <>
               <BoqTable section="dismantling" estimate={e} onChange={change} />
