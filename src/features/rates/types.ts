@@ -25,5 +25,7 @@ export interface CatalogItem {
 
 export interface RateCatalog {
   source: string;
+  /** Version of the Common SoR workbook, e.g. 76. */
+  version?: number | null;
   items: CatalogItem[];
 }

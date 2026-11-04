@@ -1,6 +1,6 @@
 import { existsSync, readFileSync } from 'node:fs';
 import ExcelJS from 'exceljs';
-import { abstractOf, generalAbstract } from '@/features/preparation/calc';
+import { abstractOf, generalAbstract, sectionTotals } from '@/features/preparation/calc';
 import { buildTemplate } from '@/features/preparation/template';
 import { kindOfSheet, parseBoq, readAbstract, sectionOfSheet, warningsOf } from './parse';
 import { readBoqWorkbook } from './readWorkbook';
@@ -169,11 +169,20 @@ describe('KPTCL estimate workbooks', () => {
     expect(abstractOf(e, 'line').at(-1)!.lakhs).toBe(20.42);
     expect(generalAbstract(e)).toEqual({ capital: 394.55, line: 20.42, dismantling: 0, total: 414.97 });
 
-    // A corrected quantity keeps the stated total: the miscellaneous amount absorbs the change, as on the sheet.
+    expect(plan.warnings).toEqual([]);
+
+    // A quantity changed in the review is not hidden inside "Miscellaneous": the file's own miscellaneous
+    // amount is kept, the total moves by the change, and the review says so.
     const edited = r.items.map((i) => (i.description === 'Construction of Embankment' ? { ...i, qty: 101 } : i));
-    const again = applyImport(e, planImport(r, edited, all(r)), 'replace');
-    expect(again.misc.civil).toBe(2_126);
-    expect(abstractOf(again, 'I').at(-1)!.lakhs).toBe(394.55);
+    const plan2 = planImport(r, edited, all(r));
+    const again = applyImport(e, plan2, 'replace');
+    expect(again.misc.civil).toBe(2_600);
+    expect(sectionTotals(again).total.civil).toBe(50_474);
+    expect(plan2.warnings).toEqual(['SS Civil: the supply total differs from the file by Rs 474, because items were left out or changed in the review.']);
+
+    // Leaving an item out takes it off the total too, instead of the miscellaneous amount growing to cover it.
+    const without = planImport(r, r.items.filter((i) => i.description !== 'Construction of Embankment'), all(r));
+    expect(sectionTotals(applyImport(e, without, 'replace')).total.civil).toBe(2_600);
   });
 
   it('keeps a saved formula result of 0 (ExcelJS drops it from the cell value)', async () => {

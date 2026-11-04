@@ -121,6 +121,7 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
                     {l.source && <p className="text-xs text-gray-400">From {l.source}</p>}
                     {l.rateRef && <p className="text-xs text-emerald-700">Rates: {l.rateRef}</p>}
                     {noRate && <p className="text-xs text-amber-700">Rate needed</p>}
+                    {electrical && l.qty > 0 && l.supplyRate === 0 && (l.erectionRate > 0 || l.testingRate > 0) && <p className="text-xs text-gray-400">Labour only: no supply rate</p>}
                   </td>
                   <td className="px-2 py-1.5">
                     <input

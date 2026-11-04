@@ -41,6 +41,8 @@ export interface EstimateLine {
   rateRef?: string;
   /** SoR item code the BOQ itself names (an "SR Code" column), used to take that exact catalog item. */
   srCode?: string;
+  /** Headings the line sits under in the BOQ ("Fabrication and supply of towers"), used only to match it to the rate catalog. */
+  group?: string;
 }
 
 export interface Estimate {

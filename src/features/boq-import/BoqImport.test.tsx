@@ -22,14 +22,25 @@ async function boqWorkbook() {
 }
 
 describe('BOQ import', () => {
-  it('reads an .xlsx attached in Documents', async () => {
+  it('takes only the BOQ PDF in Documents and does not read workbooks there', async () => {
     seed([DPR]);
     renderAt(`/documents?dpr=${enc}`);
     const core = await screen.findByRole('region', { name: 'Core documents' });
     const input = within(core).getByTestId('core-file-input');
     await userEvent.click(within(core).getByRole('button', { name: 'Add files to Bill of Quantity (BOQ)' }));
+    expect(input).toHaveAttribute('accept', 'application/pdf,.pdf');
+    await userEvent.upload(input, new File([await boqWorkbook()], 'kogali-boq.xlsx'), { applyAccept: false });
+    expect(await screen.findByText('PDF only')).toBeInTheDocument();
+    expect(sampleStore.boqReads(DPR.id)['bill-of-quantity-electrical'] ?? []).toHaveLength(0);
+  });
+
+  it('reads an estimated BOQ uploaded in the Estimate tab', async () => {
+    seed([DPR]);
+    renderAt(`/preparation?dpr=${enc}`);
+    await userEvent.click(await screen.findByRole('tab', { name: /Estimate/ }));
+    const input = await screen.findByLabelText('Estimated BOQ workbook', { selector: 'input' });
     await userEvent.upload(input, new File([await boqWorkbook()], 'kogali-boq.xlsx'));
-    expect(await screen.findByText('Read 3 items from kogali-boq.xlsx', {}, { timeout: 5000 })).toBeInTheDocument();
+    expect(await screen.findByRole('region', { name: 'Review BOQ import: kogali-boq.xlsx' }, { timeout: 5000 })).toBeInTheDocument();
     expect(sampleStore.boqReads(DPR.id)['bill-of-quantity-electrical']![0]!.items).toHaveLength(3);
   });
 
@@ -38,8 +49,9 @@ describe('BOQ import', () => {
     sampleStore.saveDocuments(DPR.id, { files: { 'bill-of-quantity-electrical': [{ name: 'kogali-boq.xlsx', size: 1, addedAt: '2026-10-31T00:00:00Z' }] }, notApplicable: [] });
     sampleStore.saveBoqRead(DPR.id, 'bill-of-quantity-electrical', await readBoqWorkbook(await boqWorkbook(), 'kogali-boq.xlsx', 'electrical'));
     renderAt(`/preparation?dpr=${enc}`);
+    await userEvent.click(await screen.findByRole('tab', { name: /Estimate/ }));
 
-    const inputs = await screen.findByRole('region', { name: 'Input documents' });
+    const inputs = await screen.findByRole('region', { name: 'Estimated BOQ workbook' });
     expect(within(inputs).getByText('3 items read, 2 to check')).toBeInTheDocument();
     await userEvent.click(within(inputs).getByRole('button', { name: 'Review & import' }));
 
@@ -69,6 +81,7 @@ describe('BOQ import', () => {
     sampleStore.saveDocuments(DPR.id, { files: { 'bill-of-quantity-electrical': [{ name: 'kogali-boq.xlsx', size: 1, addedAt: '2026-10-31T00:00:00Z' }] }, notApplicable: [] });
     sampleStore.saveBoqRead(DPR.id, 'bill-of-quantity-electrical', await readBoqWorkbook(await boqWorkbook(), 'kogali-boq.xlsx', 'electrical'));
     renderAt(`/preparation?dpr=${enc}`);
+    await userEvent.click(await screen.findByRole('tab', { name: /Estimate/ }));
     await userEvent.click(await screen.findByRole('button', { name: 'Review & import' }));
     const review = screen.getByRole('region', { name: /Review BOQ import/ });
     await userEvent.click(within(review).getByRole('checkbox', { name: 'Skip row 4' }));
@@ -106,6 +119,7 @@ describe('BOQ import', () => {
     sampleStore.saveDocuments(DPR.id, { files: { 'bill-of-quantity-electrical': [{ name: 'estimate.xlsx', size: 1, addedAt: '2026-11-02T00:00:00Z' }] }, notApplicable: [] });
     sampleStore.saveBoqRead(DPR.id, 'bill-of-quantity-electrical', await readBoqWorkbook(buffer, 'estimate.xlsx', 'electrical'));
     renderAt(`/preparation?dpr=${enc}`);
+    await userEvent.click(await screen.findByRole('tab', { name: /Estimate/ }));
     await userEvent.click(await screen.findByRole('button', { name: 'Review & import' }));
     const review = screen.getByRole('region', { name: 'Review BOQ import: estimate.xlsx' });
     expect(within(review).getByText(/→ Line supply & erection/)).toBeInTheDocument();

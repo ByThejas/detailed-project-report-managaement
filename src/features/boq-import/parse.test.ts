@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { columnLetter, openErrors, parseBoq, readNumber, roleOf, warningsOf } from './parse';
+import { columnLetter, openErrors, parseBoq, readNumber, roleOf, sectionOfContent, warningsOf } from './parse';
 import { readBoqWorkbook } from './readWorkbook';
 import type { Cell } from './types';
 
@@ -181,5 +181,31 @@ describe('readBoqWorkbook', () => {
   it('returns a failure instead of throwing for a file that is not a workbook', async () => {
     const r = await readBoqWorkbook(new TextEncoder().encode('not a zip').buffer as ArrayBuffer, 'x.xlsx', 'civil');
     expect(r.failure).toMatch(/could not be opened/);
+  });
+});
+
+describe('KPTCL estimate layouts', () => {
+  it('takes the quantity from a TOTAL Quantity column, and folds an unnumbered priced row into the item above', () => {
+    const r = parseBoq(
+      grid([
+        ['Sl No', 'Description', 'Unit', 'Quantity', 'Unit Weight', 'TOTAL Quantity', 'Rate', 'Amount'],
+        ['1', 'Tower type DA', 'MT', 4, 5.5, 22, 141_680, 3_116_960],
+        [null, null, 'MT', 1, 0.5, 0.5, 149_270, 74_635],
+        ['2', 'Earth wire', 'Km', 3, null, null, 50_000, 150_000],
+      ]),
+      'l.xlsx',
+      'line',
+    );
+    const [tower, bolts, wire] = r.items;
+    expect(tower).toMatchObject({ qty: 22, supplyRate: 141_680 });
+    expect(bolts!.description).toBe('Tower type DA (contd.)');
+    expect(wire).toMatchObject({ qty: 3, supplyRate: 50_000 });
+  });
+
+  it('tells a part by what its items are when the sheet name does not', () => {
+    expect(sectionOfContent('66 kV transmission line from A to B', ['Excavation in all kinds of soil', 'Cement concrete 1:2:4', 'Reinforcement steel'])).toBe('lineCivil');
+    expect(sectionOfContent('Stringing of conductor', ['ACSR Coyote conductor', 'Disc insulators'])).toBe('line');
+    expect(sectionOfContent('CT enhancement at the 66 kV line bay of Somenahalli line', ['Current Transformer', '66 kV class, 31.5 kA, CT of ratio 400-200/1-1-1A'])).toBeUndefined();
+    expect(sectionOfContent('', ['Dismantling of old CT', 'Releasing of conductor', 'Painting'])).toBe('dismantling');
   });
 });

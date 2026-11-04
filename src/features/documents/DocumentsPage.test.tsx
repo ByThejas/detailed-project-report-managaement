@@ -39,7 +39,7 @@ describe('Documents', () => {
     const core = screen.getByRole('region', { name: 'Core documents' });
     expect(within(core).getAllByRole('row')).toHaveLength(14 + 1);
     expect(within(core).getByText('Earth-Mat Design').closest('tr')).toHaveTextContent('R&D');
-    expect(screen.getByRole('button', { name: 'Submit to Consultant' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Submit for DPR preparation' })).toBeDisabled();
   });
 
   it('opens the DPR named in the URL and filters a table', async () => {
@@ -72,11 +72,11 @@ describe('Documents', () => {
     expect(within(summary).getByText('N/A').parentElement).toHaveTextContent('1');
   });
 
-  it('submits to the consultant once every mandatory document has a file, then still allows changes and an update', async () => {
+  it('submits for DPR preparation once every mandatory document has a file, then still allows changes and an update', async () => {
     seed([row()]);
     renderAt('/documents?dpr=DPR%2FPEE%2F2026%2F0001');
     await screen.findByRole('region', { name: 'Core documents' });
-    const submit = screen.getByRole('button', { name: 'Submit to Consultant' });
+    const submit = screen.getByRole('button', { name: 'Submit for DPR preparation' });
     expect(submit).toBeDisabled();
     expect(screen.getByText(/7 mandatory documents still needed/)).toBeInTheDocument();
 
@@ -87,8 +87,8 @@ describe('Documents', () => {
     await userEvent.click(await screen.findByRole('button', { name: 'Yes, submit' }));
     expect(await screen.findByText(/You can still add, remove or change documents/)).toBeInTheDocument();
     const summary = screen.getByRole('region', { name: 'Document summary' });
-    expect(within(summary).getByText('Pending').parentElement).toHaveTextContent('7');
-    const again = screen.getByRole('button', { name: 'Send update to Consultant' });
+    expect(within(summary).getByText('Submitted').parentElement).toHaveTextContent('7');
+    const again = screen.getByRole('button', { name: 'Submit update for DPR preparation' });
     expect(again).toBeDisabled();
 
     // A document of its own for this DPR, then a file in it.
@@ -102,7 +102,7 @@ describe('Documents', () => {
     expect(changes).toHaveTextContent('Added Forest NOC.pdf to Forest NOC');
     expect(again).toBeEnabled();
     await userEvent.click(again);
-    await userEvent.click(await screen.findByRole('button', { name: 'Yes, send update' }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Yes, submit update' }));
     expect(await screen.findByText(/2 submissions/)).toBeInTheDocument();
     expect(screen.queryByRole('list', { name: 'Changes since the last submission' })).not.toBeInTheDocument();
   });

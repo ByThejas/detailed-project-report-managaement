@@ -10,7 +10,7 @@ export interface DprDocuments {
   files: Record<string, DocFile[]>;
   /** Optional documents marked "not applicable" for this DPR. */
   notApplicable: string[];
-  /** When the documents last went to the consultant. Files can still be changed afterwards. */
+  /** When the documents were last submitted for DPR preparation. Files can still be changed afterwards. */
   submittedAt?: string;
   /** Extra optional documents added for this DPR only, beyond the standard list. */
   extra?: ExtraDocument[];
@@ -39,4 +39,4 @@ export interface Submission {
 
 export const EMPTY_DOCUMENTS: DprDocuments = { files: {}, notApplicable: [] };
 
-export type DocStatus = 'Awaiting' | 'Uploaded' | 'Pending' | 'N/A';
+export type DocStatus = 'Awaiting' | 'Uploaded' | 'Submitted' | 'N/A';

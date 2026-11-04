@@ -64,7 +64,8 @@ export const SECTIONS = [
   { key: 'alternatives', title: 'List of alternatives' },
   { key: 'proposals', title: 'Proposals' },
   { key: 'towers', title: 'Tower schedule', lineOnly: true, table: true },
-  { key: 'costBenefit', title: 'Cost–benefit analysis and payback period' },
+  // Left out for pure line works, which carry no BCR (ADR-0007).
+  { key: 'costBenefit', title: 'Cost–benefit analysis and payback period', bcr: true },
   { key: 'expenditure', title: 'Expenditure' },
   { key: 'approvals', title: 'Approvals' },
   { key: 'budget', title: 'Budget provision' },
@@ -111,7 +112,7 @@ export function expenditureText(dpr: DprRow, lineWorks: boolean): string {
     : 'The provisional expenditure is 80% of the awarded amount within a year from the date of award, and the balance 20% of the awarded amount during the consequent year.';
 }
 
-export function defaultContent(dpr: DprRow, lineWorks = false): DprContent {
+export function defaultContent(dpr: DprRow, lineWorks = false, lineOnly = false): DprContent {
   const brownfield = dpr.stream !== 'Greenfield';
   const where = [dpr.station || dpr.location, dpr.division && `${dpr.division} division`, dpr.circle && `${dpr.circle} circle`].filter(Boolean).join(', ');
   return {
@@ -171,13 +172,16 @@ export function defaultContent(dpr: DprRow, lineWorks = false): DprContent {
       ...(brownfield ? [{ label: 'Dismantling', value: '[Existing equipment, structures or buildings to be dismantled or shifted.]' }] : []),
       { label: 'Certificate', value: 'The DPR is prepared as per the Common Schedule of Rates for KPTCL, ESCOMs & PWD (Electrical) 2023-24, Volume-6.' },
     ],
-    pert: defaultPert(dpr, lineWorks),
+    pert: defaultPert(dpr, lineWorks, lineOnly),
   };
 }
 
+/** Line works with no sub-station items: the PERT follows the line-work schedule. */
+export const isLineOnly = (e: Estimate) => hasLineWorks(e) && !e.lines.some((l) => l.section === 'electrical' || l.section === 'civil');
+
 /** Saved text over the defaults. Older saves had one "objectives" text; it becomes the primary objectives. */
 export const contentOf = (dpr: DprRow, e: Estimate): DprContent => {
-  const d = defaultContent(dpr, hasLineWorks(e));
+  const d = defaultContent(dpr, hasLineWorks(e), isLineOnly(e));
   const saved = e.document as (Partial<DprContent> & { sections?: Partial<Record<SectionKey | 'objectives', string>> }) | undefined;
   if (!saved) return d;
   const sections = { ...d.sections, ...saved.sections } as DprContent['sections'] & { objectives?: string };
@@ -197,10 +201,10 @@ export const contentOf = (dpr: DprRow, e: Estimate): DprContent => {
 export const applies = (x: object, lineWorks: boolean) => !('lineOnly' in x && x.lineOnly) || lineWorks;
 
 /** The parts of "02 Project report" this DPR has, lettered a, b, c… The two objectives share one letter. */
-export function letteredSections(lineWorks: boolean): { letter: string; group: string; parts: SectionSpec[] }[] {
+export function letteredSections(lineWorks: boolean, noBcr = false): { letter: string; group: string; parts: SectionSpec[] }[] {
   const out: { letter: string; group: string; parts: SectionSpec[] }[] = [];
   for (const s of SECTIONS) {
-    if (!applies(s, lineWorks)) continue;
+    if (!applies(s, lineWorks) || (noBcr && 'bcr' in s)) continue;
     const group = 'group' in s ? s.group : s.title;
     const last = out[out.length - 1];
     if (last && last.group === group) last.parts.push(s);
@@ -210,14 +214,14 @@ export function letteredSections(lineWorks: boolean): { letter: string; group: s
 }
 
 /** What still has to be written before the DPR stops being a draft. */
-export function contentGaps(c: DprContent, lineWorks = false): string[] {
+export function contentGaps(c: DprContent, lineWorks = false, noBcr = false): string[] {
   const gaps: string[] = [];
   for (const f of DETAIL_FIELDS as readonly DetailField[]) {
     if (!applies(f, lineWorks) || f.optional) continue;
     const v = c.details[f.key as DetailKey]?.trim();
     if (!v || PLACEHOLDER.test(v)) gaps.push(f.label);
   }
-  for (const { letter, parts } of letteredSections(lineWorks)) {
+  for (const { letter, parts } of letteredSections(lineWorks, noBcr)) {
     for (const s of parts) {
       const v = c.sections[s.key]?.trim();
       if (!v || PLACEHOLDER.test(v)) gaps.push(`${letter}. ${s.title}`);
@@ -226,4 +230,22 @@ export function contentGaps(c: DprContent, lineWorks = false): string[] {
   if (lineWorks && !c.tables.towers.rows.some((r) => r.slice(1).some((x) => x.trim()))) gaps.push('Tower schedule table');
   for (const r of c.salient) if (!r.value.trim() || PLACEHOLDER.test(r.value)) gaps.push(`Salient features: ${r.label}`);
   return gaps;
+}
+
+/**
+ * Physical scale of a line work, shown in place of BCR, IRR and payback when the DPR carries no BCR
+ * (ADR-0007): route length from the line's title or name of work, towers from the tower schedule, and
+ * terminal bays from section 01. A value not found is shown as "—".
+ */
+export function lineScale(c: DprContent): { route: string; towers: string; bays: string } {
+  const D = c.details;
+  const km = [D.lineEstimateTitle, D.lineComponent, D.nameOfWork].map((t) => t?.match(/(\d+(?:\.\d+)?)\s*(?:kms?|kilomet)/i)).find(Boolean);
+  const counts = c.tables.towers.rows.map((r) => parseFloat((r[r.length - 1] ?? '').replace(/,/g, ''))).filter((n) => Number.isFinite(n));
+  const towers = counts.reduce((a, n) => a + n, 0);
+  const bays = D.terminalBays?.match(/(\d+)\s*(?:nos?\b|numbers)/i) ?? D.terminalBays?.match(/^\s*(\d+)\b/);
+  return {
+    route: km ? `${km[1]} km` : '—',
+    towers: counts.length ? `${towers} nos.` : '—',
+    bays: bays ? `${bays[1]} nos.` : '—',
+  };
 }

@@ -2,7 +2,7 @@ import type { DprDocuments } from '@/features/documents/types';
 import { ALL_DOCUMENTS, PREPARATION_INPUTS } from '@/features/documents/catalog';
 import { statusOf } from '@/features/documents/state';
 import { hasLineWorks, linesMissingRates } from '@/features/preparation/calc';
-import { hasBcrInputs } from '@/features/preparation/finance';
+import { hasBcrInputs, isBcrExempt } from '@/features/preparation/finance';
 import type { Estimate } from '@/features/preparation/types';
 import { TEMPLATE_SOURCE } from '@/features/preparation/template';
 import { sectionLabel } from '@/features/boq-import/toEstimateLine';
@@ -43,9 +43,10 @@ export function dprChecklist(e: Estimate, docs: DprDocuments, content: DprConten
     const where = [...new Set(sample.map((l) => sectionLabel(l.section)))].join(', ');
     gaps.push({ step: 'estimate', label: `${sample.length} items are still the sample template's (${where}): import or replace them` });
   }
-  if (!hasBcrInputs(e.financials)) gaps.push({ step: 'finance', label: e.financials?.method === 'manual' ? 'yearly benefits for the BCR' : 'BCR inputs (additional MVA)' });
+  const noBcr = isBcrExempt(e);
+  if (!noBcr && !hasBcrInputs(e.financials)) gaps.push({ step: 'finance', label: e.financials?.method === 'manual' ? 'yearly benefits for the BCR' : 'BCR inputs (additional MVA)' });
   for (const p of pertProblems(content.pert)) gaps.push({ step: 'schedule', label: `PERT: ${p}` });
-  for (const g of contentGaps(content, hasLineWorks(e))) gaps.push({ step: 'text', label: `text: ${g}` });
+  for (const g of contentGaps(content, hasLineWorks(e), noBcr)) gaps.push({ step: 'text', label: `text: ${g}` });
   for (const c of openBlockers(checks, content.acks)) gaps.push({ step: c.step, label: `mismatch: ${c.message}` });
   return gaps;
 }

@@ -1,5 +1,5 @@
 // Builds src/data/rateCatalog.json from the KPTCL rate catalog workbook (Common SoR 2023-24).
-// Usage: npm run generate:rates [-- path/to/rate_catalog.xlsx]
+// Usage: npm run generate:rates [-- path/to/rate_catalog.xlsx ["rate_catalog 76.xlsx"]]
 //
 // Each sheet has columns Code | Kind | Item / Activity | Unit | Rate | SR ref | Remarks. A coded Supply row is
 // followed by its uncoded Labour and T&C rows. Rows without a kind are chapter headings or a shared
@@ -63,5 +63,8 @@ for (const ws of wb.worksheets) {
 }
 
 const out = path.join(root, 'src', 'data', 'rateCatalog.json');
-writeFileSync(out, JSON.stringify({ source: path.basename(input), items }));
+// The canonical catalog is "rate_catalog 76.xlsx" (see data/RATE_CATALOG.md); its name carries the version.
+const name = process.argv[3] ?? 'rate_catalog 76.xlsx';
+const version = Number(/(\d+)\.xlsx$/i.exec(name)?.[1] ?? 0) || null;
+writeFileSync(out, JSON.stringify({ source: name, version, items }));
 console.log(`Wrote ${items.length} items to ${path.relative(root, out)}`, stats);

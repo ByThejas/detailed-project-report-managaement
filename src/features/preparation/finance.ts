@@ -4,6 +4,21 @@
  * (7 years, discounted); the KPTCL method matches the Thyavanige DPR.
  */
 
+import { hasLineWorks } from './calc';
+import type { Estimate } from './types';
+
+/** A power transformer (by MVA rating or by name) in the estimate means the station's capacity changes. */
+const CAPACITY_CHANGE = /\bpower\s+transformer|\b\d+(?:\.\d+)?\s*mva\b/i;
+
+/**
+ * Pure line works: a line and its terminal bays, with no change in substation capacity (no power
+ * transformer anywhere in the estimate). KPTCL does not ask for a Financial BCR for these (ADR-0007).
+ */
+export const isPureLineWorks = (e: Estimate) => hasLineWorks(e) && !e.lines.some((l) => l.section !== 'dismantling' && CAPACITY_CHANGE.test(l.description));
+
+/** Whether this DPR carries no BCR. The user's choice wins; otherwise pure line works are exempt. */
+export const isBcrExempt = (e: Estimate) => e.financials?.bcrExempt ?? isPureLineWorks(e);
+
 /** True when the B/C ratio can be worked out: KPTCL inputs filled in, or benefits entered by hand. */
 export function hasBcrInputs(f: Financials | undefined): boolean {
   if (!f) return false;
@@ -24,6 +39,11 @@ export interface Financials {
   discountRatePct: number;
   /** Benefit in each year of the analysis period, Rs lakh (manual method). */
   benefits: number[];
+  /**
+   * Set by the user to override the automatic rule that pure line works carry no BCR section or
+   * annexure (ADR-0007). Not set means automatic.
+   */
+  bcrExempt?: boolean;
 }
 
 /** Inputs of the KPTCL BCR workbook, as printed on the DPR's BCR annexure. */
@@ -55,8 +75,9 @@ export interface BcrInputs {
 export const DEFAULT_BCR_INPUTS: BcrInputs = {
   addedMva: 0,
   energySavingsMu: 0,
-  salePrice: 8.96,
-  transmissionCharge: 0.79,
+  // FY values from the KPTCL BCR calculator (12-09-2026). They are fixed each financial year.
+  salePrice: 9.54,
+  transmissionCharge: 0.744,
   loadGrowthPct: 8,
   discountRatePct: 9,
   omPct: 1,
@@ -89,7 +110,7 @@ export interface BcrAppraisal {
   npvBenefits: number;
   /** Project cost plus the present value of O&M. */
   npvCapital: number;
-  /** Minimum capital requirement = project cost. */
+  /** Minimum capital requirement: the deepest point of the cumulative discounted cash flow (the project cost unless early years run at a loss). */
   mcr: number;
   /** NPV ÷ MCR + 1. */
   bcrMethod1: number;
@@ -98,6 +119,8 @@ export interface BcrAppraisal {
   irr: number | null;
   /** First year in which the cumulative discounted cash flow turns positive. */
   payback: number | null;
+  /** When the cumulative discounted cash flow crosses zero, in years with a fraction (e.g. 8.4), or null. */
+  breakEven: number | null;
   totalIncome: number;
   /** Energy the added MVA can deliver at full load, MU per year. */
   capacityMu: number;
@@ -140,12 +163,24 @@ export function kptclAppraisal(cost: number, i: BcrInputs, years = ANALYSIS_YEAR
     schedule.push({ year: n, energyCharge, transmissionCharge, savings, additionalSaleMu, additionalSavings, income, cashFlow, discountFactor, discountedCashFlow, cumulative });
   }
   const npvCapital = cost + omPv;
+  // As in the KPTCL BCR calculator: MCR is the trough of the cumulative DCF, and break-even is interpolated
+  // within the year the cumulative DCF turns positive.
+  const cums = [-cost, ...schedule.map((y) => y.cumulative)];
+  const mcr = -Math.min(...cums);
+  let breakEven: number | null = null;
+  for (let n = 1; n < cums.length - 1; n++) {
+    if (cums[n]! < 0 && cums[n + 1]! >= 0) {
+      breakEven = n + cums[n]! / (cums[n]! - cums[n + 1]!);
+      break;
+    }
+  }
   return {
     schedule,
     npvBenefits,
     npvCapital,
-    mcr: cost,
-    bcrMethod1: (npvBenefits - cost) / cost + 1,
+    mcr,
+    bcrMethod1: (npvBenefits - cost) / mcr + 1,
+    breakEven,
     bcr: npvBenefits / npvCapital,
     irr: internalRateOfReturn(cost, schedule.map((y) => y.cashFlow)),
     payback: schedule.find((y) => y.cumulative >= 0)?.year ?? null,

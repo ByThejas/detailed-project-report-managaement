@@ -9,8 +9,9 @@ export default defineConfig({
     alias: { '@': fileURLToPath(new URL('./src', import.meta.url)) },
   },
   server: { port: 5173 },
-  // ExcelJS (~940 kB) is loaded on demand only when a report is downloaded.
-  build: { chunkSizeWarningLimit: 1000 },
+  // Pages, ExcelJS (~940 kB), docx, pdf-lib, pdf.js and the rate catalog (~2.4 MB of JSON, 160 kB
+  // gzipped) are all loaded on demand, so the app opens with ~80 kB gzipped of script.
+  build: { chunkSizeWarningLimit: 2500 },
   test: {
     globals: true,
     environment: 'jsdom',

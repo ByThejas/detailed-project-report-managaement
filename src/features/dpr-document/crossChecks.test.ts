@@ -4,7 +4,8 @@ import { existingCapacityText, lf2, loadFigures } from '@/features/preparation/l
 import { EMPTY_DOCUMENTS } from '@/features/documents/types';
 import { row } from '@/test/fixtures';
 import { contentOf } from './content';
-import { crossChecks, highestKv, mvaRatings, openBlockers } from './crossChecks';
+import { abstractOf } from '@/features/preparation/calc';
+import { crossChecks, estimateChecks, highestKv, mvaRatings, openBlockers } from './crossChecks';
 import { dprChecklist } from './readiness';
 
 const dpr = row({ project: 'Additional 1x20 MVA transformer at 66/11 kV Thyavanige', stream: 'Brownfield', voltage: '66/11 kV', capacity: '1x20 MVA' });
@@ -46,6 +47,27 @@ describe('cross-checks', () => {
     expect(msgs).toContain('“MVA added” mentions 12.5 MVA, but the DPR is for 1x20 MVA.');
     expect(msgs).toContain("The BCR assumes 25 MVA added, more than the DPR's 1x20 MVA.");
     expect(msgs.some((m) => m.includes('“Abstract I” in the workbook states 0 lakh'))).toBe(true);
+  });
+
+  it('blocks any abstract more than Rs 1,000 off the workbook, however large the estimate', () => {
+    const e = buildTemplate(dpr);
+    const ours = abstractOf(e, 'I').at(-1)!.lakhs;
+    const at = (lakh: number) => crossChecks(dpr, e, contentOf(dpr, e), [{ sheet: 'SS ABS', part: 'I', title: '', total: lakh * 1e5 }]).filter((c) => c.id === 'abstract:I');
+    expect(at(ours)).toEqual([]);
+    expect(at(ours + 0.01)).toEqual([]);
+    // Rs 2 lakh off on an 800-lakh estimate used to pass (the check allowed 0.5%, about Rs 4 lakh here).
+    expect(at(ours + 2)).toMatchObject([{ severity: 'blocker' }]);
+  });
+
+  it('catches rows imported twice and a miscellaneous amount that is negative or too large', () => {
+    const e = buildTemplate(dpr);
+    const a = { ...e.lines[0]!, id: 'x1', source: 'boq.xlsx · SS Supply row 12' };
+    e.lines = [...e.lines, a, { ...a, id: 'x2' }];
+    e.misc = { ...e.misc, civil: -500, erection: 1e7 };
+    const ids = estimateChecks(e).map((c) => `${c.id}:${c.severity}`);
+    expect(ids).toEqual(expect.arrayContaining(['dup-rows:blocker', 'misc-neg:civil:blocker', 'misc-big:erection:warning']));
+    // The sample template's lines share one source but are not copies.
+    expect(estimateChecks(buildTemplate(dpr)).filter((c) => c.id === 'dup-rows')).toEqual([]);
   });
 
   it('works out the loading factor as the Thyavanige DPR does', () => {

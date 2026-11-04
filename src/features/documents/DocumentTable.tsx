@@ -3,13 +3,13 @@ import { ChevronRight, Paperclip, Search, Trash2, X } from 'lucide-react';
 import { Badge, type BadgeTone } from '@/components/ui/Badge';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { Pagination } from '@/components/ui/Pagination';
-import type { DocumentGroup, DocumentSpec } from './catalog';
+import { pdfOnly, type DocumentGroup, type DocumentSpec } from './catalog';
 import { filesOf, statusOf } from './state';
 import type { DocStatus, DprDocuments } from './types';
 
 const PAGE_SIZE = 15;
 
-const statusTone: Record<DocStatus, BadgeTone> = { Awaiting: 'gray', Uploaded: 'green', Pending: 'violet', 'N/A': 'gray' };
+const statusTone: Record<DocStatus, BadgeTone> = { Awaiting: 'gray', Uploaded: 'green', Submitted: 'violet', 'N/A': 'gray' };
 
 const formatSize = (bytes: number) => (bytes >= 1_048_576 ? `${(bytes / 1_048_576).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
 
@@ -130,7 +130,11 @@ export function DocumentTable({ group, docs, onAdd, onRemove, onNotApplicable, o
                         title="Add files"
                         onClick={() => {
                           target.current = spec;
-                          picker.current?.click();
+                          if (picker.current) {
+                            if (pdfOnly(spec.key)) picker.current.accept = 'application/pdf,.pdf';
+                            else picker.current.removeAttribute('accept');
+                            picker.current.click();
+                          }
                         }}
                       >
                         <Paperclip className="h-3.5 w-3.5" />

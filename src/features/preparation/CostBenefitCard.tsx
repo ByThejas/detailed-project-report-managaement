@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { formatNumber } from '@/lib/format';
 import { generalAbstract } from './calc';
-import { ANALYSIS_YEARS, DEFAULT_BCR_INPUTS, DEFAULT_FINANCIALS, kptclAppraisal, mvaFromCapacity, parsePastedNumbers, summariseFinancials, type BcrInputs, type Financials } from './finance';
+import { ANALYSIS_YEARS, DEFAULT_BCR_INPUTS, DEFAULT_FINANCIALS, isBcrExempt, isPureLineWorks, kptclAppraisal, mvaFromCapacity, parsePastedNumbers, summariseFinancials, type BcrInputs, type Financials } from './finance';
 import { NumberInput } from './NumberInput';
 import type { Estimate } from './types';
 
@@ -34,8 +34,37 @@ export function CostBenefitCard({ e, onChange, capacity = '' }: CardProps) {
   const f: Financials = e.financials ?? DEFAULT_FINANCIALS;
   const method = f.method ?? 'manual';
   const setMethod = (m: 'kptcl' | 'manual') => onChange({ ...e, financials: { ...f, method: m, inputs: f.inputs ?? DEFAULT_BCR_INPUTS } });
+  const auto = isPureLineWorks(e);
+  const exempt = isBcrExempt(e);
+  // Store a choice only when it differs from the automatic rule, so the rule keeps working as lines change.
+  const setExempt = (v: boolean) => onChange({ ...e, financials: { ...f, bcrExempt: v === auto ? undefined : v } });
+  const exemptToggle = (
+    <label className="flex items-start gap-2 text-[13px] text-gray-700">
+      <input type="checkbox" className="mt-0.5" checked={exempt} onChange={(ev) => setExempt(ev.target.checked)} />
+      <span>
+        Leave out the BCR (pure line works)
+        <span className="block text-xs text-gray-500">
+          {auto ? 'Set automatically: the estimate has line works and no power transformer.' : 'A line and its terminal bays with no change in substation capacity.'}
+        </span>
+      </span>
+    </label>
+  );
+  if (exempt)
+    return (
+      <Card role="region" aria-labelledby="cba-exempt-title">
+        <CardHeader id="cba-exempt-title" title="No cost-benefit analysis for this DPR" subtitle="Pure line works carry no BCR" />
+        <div className="space-y-3 px-5 py-4 text-sm text-gray-700">
+          <p>
+            KPTCL does not ask for a Financial BCR for a line and its terminal bays when the substation capacity does not change. The DPR leaves out the cost-benefit section and
+            annexure 6, and the cover and section 01 show route length, towers and terminal bays instead.
+          </p>
+          {exemptToggle}
+        </div>
+      </Card>
+    );
   return (
     <div className="space-y-4">
+      {exemptToggle}
       <div role="radiogroup" aria-label="BCR method" className="inline-flex rounded-md border border-gray-200 bg-white p-0.5 text-[13px]">
         {(
           [
@@ -70,7 +99,7 @@ function KptclBcrCard({ e, f, onChange, capacity }: { e: Estimate; f: Financials
   const results = [
     { label: 'Benefit-cost ratio', value: ready ? a.bcr.toFixed(2) : '—', note: ready ? (a.bcr >= 1 ? 'Viable (≥ 1.00)' : 'Not viable (< 1.00)') : '' },
     { label: 'Internal rate of return', value: ready && a.irr !== null ? `${Math.round(a.irr * 100)}%` : '—', note: `vs. ${inputs.discountRatePct}% discount rate` },
-    { label: 'Payback period', value: ready ? years(a.payback) : '—', note: 'Years (discounted)' },
+    { label: 'Payback period', value: ready ? years(a.payback) : '—', note: ready && a.breakEven !== null ? `Discounted, break-even at year ${a.breakEven.toFixed(1)}` : 'Years (discounted)' },
     { label: 'Project cost', value: `${fmt(cost)} L`, note: 'From the general abstract' },
   ];
   return (
@@ -107,6 +136,7 @@ function KptclBcrCard({ e, f, onChange, capacity }: { e: Estimate; f: Financials
       )}
       {ready && (
         <>
+          <CumulativeDcfChart cost={cost} cumulative={a.schedule.map((y) => y.cumulative)} breakEven={a.breakEven} />
           <dl className="grid gap-x-6 gap-y-1 border-t border-gray-200 px-4 py-3 text-[13px] sm:grid-cols-2 lg:grid-cols-3" aria-label="Appraisal summary">
             {(
               [
@@ -168,6 +198,46 @@ function KptclBcrCard({ e, f, onChange, capacity }: { e: Estimate; f: Financials
         </>
       )}
     </Card>
+  );
+}
+
+/** Cumulative discounted cash flow by year, as on the KPTCL BCR calculator, with the break-even point marked. */
+function CumulativeDcfChart({ cost, cumulative, breakEven }: { cost: number; cumulative: number[]; breakEven: number | null }) {
+  const values = [-cost, ...cumulative];
+  const W = 620;
+  const H = 200;
+  const lo = Math.min(0, ...values);
+  const hi = Math.max(0, ...values);
+  const span = hi - lo || 1;
+  const x = (i: number) => (i / (values.length - 1)) * W;
+  const y = (v: number) => 6 + (1 - (v - lo) / span) * (H - 12);
+  const points = values.map((v, i) => `${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
+  const ticks = [0, 5, 10, 15, 20, 25, 30].filter((t) => t < values.length);
+  return (
+    <figure className="border-t border-gray-200 px-4 py-3" aria-label="Cumulative discounted cash flow">
+      <figcaption className="mb-2 flex flex-wrap justify-between gap-2 text-xs text-gray-500">
+        <span className="font-medium text-gray-700">Cumulative discounted cash flow (Rs lakh)</span>
+        <span>
+          {fmt(lo)} to {fmt(hi)}
+          {breakEven !== null && ` · break-even ≈ year ${breakEven.toFixed(1)}`}
+        </span>
+      </figcaption>
+      <svg viewBox={`0 0 ${W} ${H}`} className="h-40 w-full" preserveAspectRatio="none" aria-hidden>
+        <line x1={0} x2={W} y1={y(0)} y2={y(0)} stroke="#9ca3af" strokeWidth={1} vectorEffect="non-scaling-stroke" />
+        {ticks.map((t) => (
+          <line key={t} x1={x(t)} x2={x(t)} y1={0} y2={H} stroke="#f3f4f6" vectorEffect="non-scaling-stroke" />
+        ))}
+        <polyline points={points} fill="none" stroke="#1f2a6b" strokeWidth={2} strokeLinejoin="round" vectorEffect="non-scaling-stroke" />
+        {breakEven !== null && <line x1={x(breakEven)} x2={x(breakEven)} y1={0} y2={H} stroke="#c2551f" strokeDasharray="4 4" vectorEffect="non-scaling-stroke" />}
+      </svg>
+      <div className="relative h-4 text-[10px] text-gray-500" aria-hidden>
+        {ticks.map((t) => (
+          <span key={t} className="absolute -translate-x-1/2" style={{ left: `${(x(t) / W) * 100}%` }}>
+            {t}
+          </span>
+        ))}
+      </div>
+    </figure>
   );
 }
 

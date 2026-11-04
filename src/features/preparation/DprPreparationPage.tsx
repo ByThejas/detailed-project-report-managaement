@@ -32,7 +32,7 @@ import {
 import type { DprRow } from "@/features/reports/types";
 import { formatNumber } from "@/lib/format";
 import { useToast } from "@/lib/toast";
-import { BOQ_DOCUMENTS, useBoqReads } from "@/features/boq-import/api";
+import { BOQ_DOCUMENTS, useBoqReads, useReadBoqFiles } from "@/features/boq-import/api";
 import { BoqReview } from "@/features/boq-import/BoqReview";
 import {
   applyImport,
@@ -43,7 +43,6 @@ import {
 import { openErrors, warningsOf } from "@/features/boq-import/parse";
 import { isReadableBoq } from "@/features/boq-import/readWorkbook";
 import type { BoqReadResult } from "@/features/boq-import/types";
-import type { BoqReads } from "@/lib/sampleStore";
 import { useEstimate, useSaveEstimate } from "./api";
 import { BoqTable } from "./BoqTable";
 import { RatePricingCard } from "@/features/rates/RatePricingCard";
@@ -77,7 +76,7 @@ const lakhs = (n: number) => formatNumber(Math.round(n * 100) / 100);
 const STATUS_TONE: Record<DocStatus, BadgeTone> = {
   Awaiting: "amber",
   Uploaded: "green",
-  Pending: "blue",
+  Submitted: "blue",
   "N/A": "gray",
 };
 const INPUT_SPECS = PREPARATION_INPUTS.map(
@@ -120,7 +119,7 @@ function SummaryStrip({ collected, e }: { collected: number; e: Estimate }) {
   );
 }
 
-function BoqReadState({
+export function BoqReadState({
   files,
   reads,
   onReview,
@@ -138,7 +137,7 @@ function BoqReadState({
         if (!isReadableBoq(f.name))
           state = (
             <span className="text-gray-500">
-              Not read: quantities are read from .xlsx files only
+              Not read: quantities are read from Excel files (.xlsx, .xlsm, .xls) only
             </span>
           );
         else if (!read)
@@ -183,17 +182,7 @@ function BoqReadState({
   );
 }
 
-function InputsCard({
-  dprId,
-  docs,
-  reads,
-  onReview,
-}: {
-  dprId: string;
-  docs: DprDocuments;
-  reads: BoqReads;
-  onReview: (r: BoqReadResult) => void;
-}) {
+function InputsCard({ dprId, docs }: { dprId: string; docs: DprDocuments }) {
   return (
     <Card role="region" aria-labelledby="inputs-title">
       <CardHeader
@@ -236,16 +225,83 @@ function InputsCard({
                 {status === "Awaiting" ? "Missing" : status}
               </Badge>
               {BOQ_DOCUMENTS[spec.key] && (
-                <BoqReadState
-                  files={files}
-                  reads={reads[spec.key] ?? []}
-                  onReview={onReview}
-                />
+                <span className="w-full pl-9 text-xs text-gray-500">
+                  The BOQ PDF as received. The estimated BOQ workbook is
+                  uploaded in the Estimate tab.
+                </span>
               )}
             </li>
           );
         })}
       </ol>
+    </Card>
+  );
+}
+
+function EstimateUploadCard({
+  dprId,
+  reads,
+  onReview,
+}: {
+  dprId: string;
+  reads: BoqReadResult[];
+  onReview: (r: BoqReadResult) => void;
+}) {
+  const readBoq = useReadBoqFiles(dprId);
+  const toast = useToast();
+  const onFiles = (list: FileList | null) => {
+    const files = [...(list ?? [])];
+    if (!files.length) return;
+    readBoq.mutate(
+      { docKey: "bill-of-quantity-electrical", files },
+      {
+        onSuccess: ({ results, unreadable }) => {
+          if (unreadable.length)
+            toast({
+              title: "Not read",
+              description: `Only Excel workbooks (.xlsx, .xlsm, .xls) can be read: ${unreadable.join(", ")}.`,
+              tone: "error",
+            });
+          const ok = results.find((r) => !r.failure);
+          for (const r of results)
+            if (r.failure)
+              toast({ title: `Could not read ${r.fileName}`, description: r.failure, tone: "error" });
+          if (ok) onReview(ok);
+        },
+      },
+    );
+  };
+  return (
+    <Card role="region" aria-labelledby="estimate-upload-title">
+      <CardHeader
+        id="estimate-upload-title"
+        title="Estimated BOQ workbook"
+        subtitle="Upload the estimate (.xlsx or old .xls). Items are read, checked against its own abstract, and priced from the rate catalog for you to review."
+        action={
+          <label className="btn-secondary cursor-pointer">
+            {readBoq.isPending ? "Reading…" : "Upload estimate (Excel)"}
+            <input
+              type="file"
+              accept=".xlsx,.xlsm,.xls"
+              className="sr-only"
+              aria-label="Estimated BOQ workbook"
+              onChange={(ev) => {
+                onFiles(ev.target.files);
+                ev.target.value = "";
+              }}
+            />
+          </label>
+        }
+      />
+      {reads.length > 0 && (
+        <div className="pb-2">
+          <BoqReadState
+            files={reads.map((r) => ({ name: r.fileName }))}
+            reads={reads}
+            onReview={onReview}
+          />
+        </div>
+      )}
     </Card>
   );
 }
@@ -302,7 +358,7 @@ function ChargeInput({
   );
 }
 
-function AbstractCard({
+export function AbstractCard({
   e,
   part,
   onChange,
@@ -405,7 +461,7 @@ function AbstractCard({
   );
 }
 
-function GeneralAbstractCard({
+export function GeneralAbstractCard({
   e,
   brownfield,
 }: {
@@ -624,10 +680,19 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
           aria-labelledby="tab-inputs"
           className="space-y-4"
         >
-          <InputsCard
+          <InputsCard dprId={dpr.id} docs={docs} />
+        </div>
+      )}
+      {tab === "estimate" && (
+        <div
+          role="tabpanel"
+          id="panel-estimate"
+          aria-labelledby="tab-estimate"
+          className="space-y-4"
+        >
+          <EstimateUploadCard
             dprId={dpr.id}
-            docs={docs}
-            reads={reads.data ?? {}}
+            reads={Object.values(reads.data ?? {}).flat()}
             onReview={startReview}
           />
           {reviewing && (
@@ -639,24 +704,14 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
               onImport={importLines}
             />
           )}
-        </div>
-      )}
-      {tab === "estimate" && (
-        <div
-          role="tabpanel"
-          id="panel-estimate"
-          aria-labelledby="tab-estimate"
-          className="space-y-4"
-        >
           {dpr.stream === "Greenfield" &&
             !e.lines.some((l) => l.section !== "dismantling") && (
               <p
                 role="status"
                 className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-[13px] text-gray-700"
               >
-                Greenfield estimates start empty. Attach the electrical and
-                civil BOQ workbooks in Documents, then use Review &amp; import
-                below, or add items by hand.
+                Greenfield estimates start empty. Upload the estimated BOQ
+                workbook above and review it, or add items by hand.
               </p>
             )}
           {e.templateCapacity !== `${dpr.capacity} ${dpr.voltage}` && (

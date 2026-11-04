@@ -3,10 +3,10 @@ import type { DprRow } from '@/features/reports/types';
 import type { DprDocuments } from '@/features/documents/types';
 import { filesOf } from '@/features/documents/state';
 import { SECTION_KEYS, abstractOf, generalAbstract, hasLineWorks, lineAmounts, sectionTotals, type AbstractRow } from '@/features/preparation/calc';
-import { DEFAULT_BCR_INPUTS, DEFAULT_FINANCIALS, kptclAppraisal, summariseFinancials } from '@/features/preparation/finance';
+import { DEFAULT_BCR_INPUTS, DEFAULT_FINANCIALS, isBcrExempt, kptclAppraisal, summariseFinancials } from '@/features/preparation/finance';
 import type { Estimate, EstimateSection } from '@/features/preparation/types';
-import { DETAIL_FIELDS, applies, letteredSections, type DprContent, type SimpleTable } from './content';
-import { pertMonths } from './pert';
+import { DETAIL_FIELDS, applies, letteredSections, lineScale, type DprContent, type SimpleTable } from './content';
+import { criticalPath, pertMilestones, pertMonths } from './pert';
 
 export interface DprDocInput {
   dpr: DprRow;
@@ -47,6 +47,8 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
   const fin = summariseFinancials(g.total, f);
   const brownfield = e.lines.some((l) => l.section === 'dismantling');
   const lineWorks = hasLineWorks(e);
+  // Pure line works carry no BCR anywhere: no cover figures, no section, no annexure 6 (ADR-0007).
+  const noBcr = isBcrExempt(e);
   const notYet = 'Not calculated';
   const bcr = fin.bcr === null ? notYet : fin.bcr.toFixed(2);
   const irr = fin.irr === null ? notYet : f.method === 'kptcl' ? `${Math.round(fin.irr * 100)}%` : `${(fin.irr * 100).toFixed(1)}%`;
@@ -107,14 +109,19 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
       width: { size: 100, type: WidthType.PERCENTAGE },
       rows: rows.map(([k, v]) => new TableRow({ children: [cell(k.toUpperCase(), { bold: true, shade: 'F2F2F2', width: 32, size: 18 }), cell(v || '—', { width: 68 })] })),
     });
-  const kpiStrip = () =>
-    new Table({
+  const scale = noBcr ? lineScale(content) : null;
+  const kpiStrip = () => {
+    const [heads, values] = scale
+      ? [['Route length', 'Towers', 'Terminal bays'], [scale.route, scale.towers, scale.bays]]
+      : [['Benefit–cost ratio', 'Internal rate of return', 'Payback period'], [bcr, irr, payback.toLowerCase()]];
+    return new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
       rows: [
-        new TableRow({ children: ['Benefit–cost ratio', 'Internal rate of return', 'Payback period'].map((h) => cell(h, { shade: '1F3864', color: 'FFFFFF', bold: true, width: 33, size: 18 })) }),
-        new TableRow({ children: [bcr, irr, payback.toLowerCase()].map((v) => cell(v, { bold: true, size: 36, width: 33 })) }),
+        new TableRow({ children: heads.map((h) => cell(h, { shade: '1F3864', color: 'FFFFFF', bold: true, width: 33, size: 18 })) }),
+        new TableRow({ children: values.map((v) => cell(v, { bold: true, size: 36, width: 33 })) }),
       ],
     });
+  };
   const simpleTable = (t: SimpleTable) => {
     const rows = t.rows.filter((r) => r.slice(1).some((c) => c.trim()));
     if (!rows.length) return [];
@@ -192,9 +199,17 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
     para('', { after: 240 }),
     coverFacts([
       ['ESTIMATED COST (₹ LAKH)', `₹ ${inr(g.total)}`],
-      ['B/C RATIO', bcr],
-      ['IRR', irr],
-      ['PAYBACK', payback],
+      ...(scale
+        ? ([
+            ['ROUTE LENGTH', scale.route],
+            ['TOWERS', scale.towers],
+            ['TERMINAL BAYS', scale.bays],
+          ] as [string, string][])
+        : ([
+            ['B/C RATIO', bcr],
+            ['IRR', irr],
+            ['PAYBACK', payback],
+          ] as [string, string][])),
     ]),
     para('PREPARED BY', { bold: true, size: 16, color: '606060', before: 900, after: 60 }),
     para(D.preparedBy || '—', { bold: true, size: 22, after: 0 }),
@@ -203,7 +218,9 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
   ];
 
   // ---- contents ----
-  const sectionsHere = letteredSections(lineWorks);
+  // Annexure numbers stay as in the Thyavanige DPR (the PDF pack relies on them), so without a BCR 6 is skipped.
+  const annexuresHere = ANNEXURES.filter((a) => !(noBcr && a.no === '6'));
+  const sectionsHere = letteredSections(lineWorks, noBcr);
   const contentsRow = (no: string, t: string, indent = false) => new TableRow({ children: [cell(indent ? '' : no, { noBorder: true, width: 12 }), cell(indent ? `${no}    ${t}` : t, { noBorder: true, width: 88, bold: !indent })] });
   const contents = [
     pageBreak(),
@@ -222,7 +239,7 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
             : [contentsRow(`${s.letter}.`, s.group, true)],
         ),
         contentsRow(`${String.fromCharCode(97 + sectionsHere.length)}.`, 'Salient features', true),
-        ...ANNEXURES.map((a) => contentsRow(`${a.no}.`, a.title)),
+        ...annexuresHere.map((a) => contentsRow(`${a.no}.`, a.title)),
       ],
     }),
   ];
@@ -333,9 +350,11 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
     coverFacts([
       ['VOLTAGE CLASS', dpr.voltage],
       ['SCOPE', p.scope],
-      ['COMPLETION PERIOD', `${p.completionMonths} months`],
+      ['TYPE OF WORK', p.kind ?? 'Sub-station work'],
+      ['COMPLETION PERIOD', `${p.completionMonths} months${p.provisional ? ' (provisional schedule)' : ''}`],
       ['ZERO DATE', p.zeroDate],
     ]),
+    ...(p.caseText ? [para(p.caseText, { size: 17, before: 80 })] : []),
     para('', { after: 160 }),
     new Table({
       width: { size: 100, type: WidthType.PERCENTAGE },
@@ -345,7 +364,7 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
           (a) =>
             new TableRow({
               children: [
-                cell(`${a.preAward ? 'Pre-award: ' : ''}${a.name}${a.preAward ? '' : ` · ${a.months} months`}`, { bold: !a.preAward, width: 30, size: 16 }),
+                cell(`${a.preAward ? 'Pre-award: ' : ''}${a.name}${a.preAward ? '' : ` · ${a.months} ${a.months === 1 ? 'month' : 'months'}`}${a.label ? `\n${a.label}` : ''}`, { bold: !a.preAward, width: 30, size: 16 }),
                 ...months.map((m) => cell('', { width: pertWidth, shade: m >= a.start && m < a.start + a.months ? (a.preAward ? 'A6A6A6' : '2E75B6') : undefined })),
               ],
             }),
@@ -354,10 +373,13 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
     }),
     para('', { after: 160 }),
     table(
-      ['Stage', 'Months', 'From – to', 'Activities'],
-      p.activities.map((a) => [a.preAward ? `Pre-award: ${a.name}` : a.name, String(a.months), `${monthLabel(a.start)} – ${monthLabel(a.start + a.months)}`, a.details.join('\n')]),
-      { widths: [22, 10, 16, 52], size: 17 },
+      ['Stage', 'Months', 'From – to', 'Activities', 'Milestone'],
+      p.activities.map((a) => [a.preAward ? `Pre-award: ${a.name}` : `${a.name}${a.label ? `\n${a.label}` : ''}`, String(a.months), `${monthLabel(a.start)} – ${monthLabel(a.start + a.months)}`, a.details.filter((d) => d.trim()).join('\n'), a.milestone ?? '']),
+      { widths: [26, 8, 13, 35, 18], size: 17 },
     ),
+    para(`Milestones: ${pertMilestones(p).map((m) => `${monthLabel(m.month)} ${m.label}`).join(' · ')}.`, { size: 16, before: 120 }),
+    para(`Critical path: ${criticalPath(p)}`, { size: 16, before: 60 }),
+    ...(p.note ? [para(p.note, { size: 16, italics: true, before: 60 })] : []),
     para(`Months are counted from the zero date (${p.zeroDate}). Pre-award activities are shown before M0 and are not counted in the ${p.completionMonths}-month completion period.`, { size: 16, italics: true, before: 120 }),
   ];
 
@@ -465,7 +487,7 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
       { properties: { page: landscape }, ...hf, children: landscapeEstimates },
       { properties: { page: landscape }, ...hf, children: pert },
       { properties: { page: portrait }, ...hf, children: attachment(ANNEXURES[2]) },
-      { properties: { page: kptcl ? landscape : portrait }, ...hf, children: bcrAnnex },
+      ...(noBcr ? [] : [{ properties: { page: kptcl ? landscape : portrait }, ...hf, children: bcrAnnex }]),
       { properties: { page: portrait }, ...hf, children: tail },
     ],
   });

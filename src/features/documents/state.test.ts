@@ -20,7 +20,7 @@ describe('document state', () => {
   });
 
   it('starts with everything awaiting and nothing submittable', () => {
-    expect(countStatuses(EMPTY_DOCUMENTS)).toEqual({ uploaded: 0, pending: 0, notReady: 24, notApplicable: 0 });
+    expect(countStatuses(EMPTY_DOCUMENTS)).toEqual({ uploaded: 0, submitted: 0, notReady: 24, notApplicable: 0 });
     expect(canSubmit(EMPTY_DOCUMENTS)).toBe(false);
     expect(missingMandatory(EMPTY_DOCUMENTS)).toHaveLength(7);
   });
@@ -43,7 +43,7 @@ describe('document state', () => {
     expect(canSubmit(ready)).toBe(true);
     const sent = submit(ready, new Date('2026-10-31T10:00:00Z'));
     expect(sent.submittedAt).toBe('2026-10-31T10:00:00.000Z');
-    expect(countStatuses(sent)).toMatchObject({ pending: 7, uploaded: 0 });
+    expect(countStatuses(sent)).toMatchObject({ submitted: 7, uploaded: 0 });
     // Nothing changed, so there is nothing to send again.
     expect(canSubmit(sent)).toBe(false);
     const more = addFiles(sent, optional.key, [{ ...file('tac.pdf'), addedAt: '2026-11-01T00:00:00Z' }]);
@@ -52,7 +52,7 @@ describe('document state', () => {
     expect(canSubmit(more)).toBe(true);
     const update = submit(more, new Date('2026-11-01T10:00:00Z'));
     expect(update.submissions!.map((x) => x.changes)).toEqual([[], [`Added tac.pdf to ${optional.name}`]]);
-    expect(statusOf(update, optional.key)).toBe('Pending');
+    expect(statusOf(update, optional.key)).toBe('Submitted');
     expect(changesSinceSubmit(update)).toEqual([]);
   });
 

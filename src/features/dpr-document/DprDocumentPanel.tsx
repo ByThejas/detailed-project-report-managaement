@@ -4,6 +4,7 @@ import { Card, CardHeader } from '@/components/ui/Card';
 import type { DprDocuments } from '@/features/documents/types';
 import { filesOf } from '@/features/documents/state';
 import { hasLineWorks } from '@/features/preparation/calc';
+import { isBcrExempt } from '@/features/preparation/finance';
 import type { Estimate } from '@/features/preparation/types';
 import type { DprRow } from '@/features/reports/types';
 import { useToast } from '@/lib/toast';
@@ -233,7 +234,7 @@ export function ReportTextPanel({ dpr, estimate, onChange, documents }: Omit<Pro
   const setDetail = (key: DetailKey, value: string) => save({ details: { ...content.details, [key]: value } });
   const setSection = (key: SectionKey, value: string) => save({ sections: { ...content.sections, [key]: value } });
   const setTable = (key: TableKey, t: SimpleTable) => save({ tables: { ...content.tables, [key]: t } });
-  const lettered = letteredSections(lineWorks);
+  const lettered = letteredSections(lineWorks, isBcrExempt(estimate));
   const salientLetter = String.fromCharCode(97 + lettered.length);
 
   return (
@@ -302,19 +303,20 @@ export function ReportTextPanel({ dpr, estimate, onChange, documents }: Omit<Pro
 /** The DPR's parts in order, with whether each is ready, and where it comes from. */
 function outline(e: Estimate, docs: DprDocuments, content: DprContent, gaps: Gap[]) {
   const lineWorks = hasLineWorks(e);
+  const noBcr = isBcrExempt(e);
   const has = (step: StepKey) => gaps.some((g) => g.step === step);
   const textGap = (needle: RegExp) => gaps.some((g) => g.step === 'text' && needle.test(g.label));
   const missing = (label: string) => gaps.some((g) => g.label === `text: ${label}`);
   const glanceKeys = DETAIL_FIELDS.filter((f) => f.group === 'glance' && applies(f, lineWorks)).map((f) => f.label);
   const coverKeys = DETAIL_FIELDS.filter((f) => f.group === 'cover').map((f) => f.label);
   const rows: { no: string; title: string; ok: boolean; note: string; step: StepKey }[] = [
-    { no: '', title: 'Cover', ok: !coverKeys.some(missing) && !has('finance'), note: 'Cost, B/C, IRR and payback from the estimate', step: 'text' },
-    { no: '1.', title: 'Project at a glance', ok: !glanceKeys.some(missing), note: `${glanceKeys.length} fact rows + KPI strip`, step: 'text' },
-    { no: '2.', title: `Project report (a–${String.fromCharCode(97 + letteredSections(lineWorks).length)})`, ok: !textGap(/^text: [a-z]\. |Salient|Tower schedule/), note: lineWorks ? 'Includes the tower schedule' : 'No line works, so no tower schedule', step: 'text' },
+    { no: '', title: 'Cover', ok: !coverKeys.some(missing) && !has('finance'), note: noBcr ? 'Cost from the estimate; route length, towers and bays (no BCR for pure line works)' : 'Cost, B/C, IRR and payback from the estimate', step: 'text' },
+    { no: '1.', title: 'Project at a glance', ok: !glanceKeys.some(missing), note: `${glanceKeys.length} fact rows + ${noBcr ? 'line scale strip' : 'KPI strip'}`, step: 'text' },
+    { no: '2.', title: `Project report (a–${String.fromCharCode(97 + letteredSections(lineWorks, noBcr).length)})`, ok: !textGap(/^text: [a-z]\. |Salient|Tower schedule/), note: lineWorks ? 'Includes the tower schedule' : 'No line works, so no tower schedule', step: 'text' },
     { no: '3.', title: 'Estimates & abstract', ok: !has('estimate') && !textGap(/estimate title|Certificate|Signed by/), note: 'General abstract, abstracts and BOQ sheets', step: 'estimate' },
     { no: '4.', title: 'PERT chart', ok: !has('schedule'), note: `${content.pert.completionMonths} months from ${content.pert.zeroDate}`, step: 'schedule' },
   ];
-  for (const a of ANNEXURES.filter((x) => !x.generated || x.no === '6')) {
+  for (const a of ANNEXURES.filter((x) => !x.generated || (x.no === '6' && !noBcr))) {
     if (a.no === '6') {
       rows.push({ no: '6.', title: a.title, ok: !has('finance'), note: e.financials?.method === 'manual' ? 'From benefits entered by hand' : 'KPTCL method: inputs, appraisal and 30-year schedule', step: 'finance' });
       continue;

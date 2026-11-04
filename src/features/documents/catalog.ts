@@ -91,3 +91,7 @@ export const PREPARATION_INPUTS = [
   'scada-sas-details',
   'transformer-feeder-load-details',
 ] as const;
+
+/** Documents that take PDFs only. The BOQ here is the PDF received from the field; the estimated BOQ workbook goes into the Estimate tab of DPR Preparation. */
+export const PDF_ONLY_DOCUMENTS = new Set(['bill-of-quantity-electrical']);
+export const pdfOnly = (key?: string): boolean => Boolean(key && PDF_ONLY_DOCUMENTS.has(key));

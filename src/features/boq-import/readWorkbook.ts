@@ -1,6 +1,7 @@
 import type { EstimateSection } from '@/features/preparation/types';
 import { parseBoq } from './parse';
 import type { BoqReadResult, Cell, SheetGrid } from './types';
+import { xlsToGrids } from './readXls';
 
 type ExcelValue = unknown;
 
@@ -20,8 +21,12 @@ export function cellToPlain(value: ExcelValue): Cell {
   return String(value);
 }
 
-/** Reads every sheet of an .xlsx into grids. Merged cells keep their value only in the top-left cell. */
+/** True for an old Excel 97–2003 (.xls) file, whatever its name. */
+const isXls = (buffer: ArrayBuffer) => buffer.byteLength > 8 && new Uint8Array(buffer, 0, 4).join() === '208,207,17,224';
+
+/** Reads every sheet of an .xlsx (or old .xls) into grids. Merged cells keep their value only in the top-left cell. */
 export async function workbookToGrids(buffer: ArrayBuffer): Promise<SheetGrid[]> {
+  if (isXls(buffer)) return xlsToGrids(buffer);
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
@@ -53,7 +58,7 @@ export async function workbookToGrids(buffer: ArrayBuffer): Promise<SheetGrid[]>
   return sheets;
 }
 
-export const isReadableBoq = (fileName: string) => /\.xlsx$/i.test(fileName);
+export const isReadableBoq = (fileName: string) => /\.xls[xm]?$/i.test(fileName);
 
 /** Reads a BOQ workbook. Never throws: a file that can't be opened comes back with `failure` set. */
 export async function readBoqWorkbook(buffer: ArrayBuffer, fileName: string, section: EstimateSection): Promise<BoqReadResult> {

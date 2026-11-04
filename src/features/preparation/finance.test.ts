@@ -51,7 +51,26 @@ describe('KPTCL BCR method', () => {
     expect(a.bcrMethod1.toFixed(2)).toBe('3.81');
     expect(Math.round(a.irr! * 100)).toBe(22);
     expect(a.payback).toBe(9);
+    expect(a.breakEven!).toBeGreaterThan(8);
+    expect(a.breakEven!).toBeLessThan(9);
     expect(Math.round(a.totalIncome)).toBe(20601);
+  });
+
+  it('takes MCR as the trough of the cumulative DCF, as the BCR calculator does, when early years run at a loss', () => {
+    // A weak case: 2 MVA on a Rs 900 lakh project, 3% growth, 12% discount. The BCR calculator gives MCR 917.19 and method 1 0.12.
+    const a = kptclAppraisal(900, { ...DEFAULT_BCR_INPUTS, addedMva: 2, salePrice: 9.54, transmissionCharge: 0.744, loadGrowthPct: 3, discountRatePct: 12, omPct: 1 })!;
+    expect(a.mcr).toBeCloseTo(917.19, 2);
+    expect(a.bcrMethod1).toBeCloseTo(0.1202, 4);
+    expect(a.bcr).toBeCloseTo(0.0957, 4);
+    expect(a.payback).toBeNull();
+    expect(a.breakEven).toBeNull();
+  });
+
+  it('matches the BCR calculator on its Thokkottu example: B/C 4.44', () => {
+    const a = kptclAppraisal(498.99, { ...DEFAULT_BCR_INPUTS, addedMva: 12.5, energySavingsMu: 0.3194, salePrice: 9.54, transmissionCharge: 0.744, loadGrowthPct: 10, discountRatePct: 12, omPct: 1 })!;
+    expect(a.bcr).toBeCloseTo(4.4363, 4);
+    expect(a.bcrMethod1).toBeCloseTo(4.7937, 4);
+    expect(a.schedule[29]!.cumulative).toBeCloseTo(1893.01, 2);
   });
 
   it('feeds the summary when the DPR uses the KPTCL method, and needs MVA or savings', () => {

@@ -17,13 +17,15 @@ interface BoqReviewProps {
   currentLines: EstimateLine[];
   onCancel: () => void;
   onImport: (plan: ImportPlan, mode: ImportMode) => void;
+  /** Offer one button that confirms every warning at once (the BOQ test bench only; a real DPR confirms row by row). */
+  allowConfirmAll?: boolean;
 }
 
 /**
  * Shows every item read from a BOQ workbook next to its source row. Nothing reaches the estimate
  * until every included row is either clean, fixed, or explicitly confirmed.
  */
-export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewProps) {
+export function BoqReview({ read, currentLines, onCancel, onImport, allowConfirmAll = false }: BoqReviewProps) {
   const [items, setItems] = useState<ParsedItem[]>(read.items);
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set());
@@ -136,6 +138,12 @@ export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewP
             the items read.
           </p>
         )}
+        {plan.warnings.map((w) => (
+          <p key={w} role="alert" className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
+            <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
+            <span>{w}</span>
+          </p>
+        ))}
         {plan.notes.length > 0 && (
           <div className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2">
             <p className="font-medium text-gray-900">Also carried over from the file</p>
@@ -292,6 +300,11 @@ export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewP
         {currentCount > 0 && (
           <button type="button" className="btn-secondary" disabled={blocking.length > 0 || lines.length === 0} onClick={() => onImport(plan, 'append')}>
             Add to the current items
+          </button>
+        )}
+        {allowConfirmAll && blocking.some((i) => openErrors(i).length === 0) && (
+          <button type="button" className="btn-secondary" onClick={() => setConfirmed((c) => new Set([...c, ...blocking.filter((i) => openErrors(i).length === 0).map((i) => i.id)]))}>
+            Confirm all warnings
           </button>
         )}
         <button type="button" className="btn-ghost" onClick={onCancel}>

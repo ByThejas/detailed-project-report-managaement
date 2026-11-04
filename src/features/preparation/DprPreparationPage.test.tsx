@@ -145,7 +145,7 @@ describe('DPR Preparation', () => {
     const months = within(pert).getByRole('spinbutton', { name: 'Stage-III months' });
     await userEvent.clear(months);
     await userEvent.type(months, '9');
-    expect(within(pert).getByRole('status')).toHaveTextContent('stages run to M16, past the 12-month completion period');
+    expect(within(pert).getByRole('status')).toHaveTextContent('stages run to M14, past the 6-month completion period');
   });
 
   it('recalculates the abstract when a quantity changes and keeps the edit', async () => {

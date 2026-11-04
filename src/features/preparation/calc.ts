@@ -55,7 +55,7 @@ export type AbstractPart = 'I' | 'II' | 'line';
 export const hasLineWorks = (e: Estimate) => e.lines.some((l) => l.section === 'line' || l.section === 'lineCivil');
 
 /** Unrounded abstract values in Rs lakh. */
-function abstractValues(e: Estimate, part: AbstractPart) {
+export function abstractValues(e: Estimate, part: AbstractPart) {
   const { total } = sectionTotals(e);
   let material = 0;
   let labour = 0;

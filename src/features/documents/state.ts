@@ -12,23 +12,23 @@ export const allDocsOf = (d: DprDocuments): DocumentSpec[] => [...ALL_DOCUMENTS,
 const nameOf = (d: DprDocuments, key: string) => allDocsOf(d).find((s) => s.key === key)?.name ?? key;
 
 /**
- * Awaiting = no file yet. Uploaded = a file not yet sent to the consultant (new, or added since the last
- * submission). Pending = sent and waiting for them. N/A = marked not applicable.
+ * Awaiting = no file yet. Uploaded = a file not yet submitted (new, or added since the last submission).
+ * Submitted = submitted for DPR preparation. N/A = marked not applicable.
  */
 export function statusOf(d: DprDocuments, key: string): DocStatus {
   if (d.notApplicable.includes(key)) return 'N/A';
   const files = filesOf(d, key);
   if (files.length === 0) return 'Awaiting';
   if (!d.submittedAt) return 'Uploaded';
-  return files.some((f) => f.addedAt > d.submittedAt!) ? 'Uploaded' : 'Pending';
+  return files.some((f) => f.addedAt > d.submittedAt!) ? 'Uploaded' : 'Submitted';
 }
 
 export function countStatuses(d: DprDocuments) {
-  const counts = { uploaded: 0, pending: 0, notReady: 0, notApplicable: 0 };
+  const counts = { uploaded: 0, submitted: 0, notReady: 0, notApplicable: 0 };
   for (const { key } of allDocsOf(d)) {
     const s = statusOf(d, key);
     if (s === 'Uploaded') counts.uploaded += 1;
-    else if (s === 'Pending') counts.pending += 1;
+    else if (s === 'Submitted') counts.submitted += 1;
     else if (s === 'Awaiting') counts.notReady += 1;
     else counts.notApplicable += 1;
   }
@@ -92,7 +92,7 @@ export function removeExtraDocument(d: DprDocuments, key: string): DprDocuments 
   return logged({ ...d, extra: d.extra!.filter((x) => x.key !== key), notApplicable: d.notApplicable.filter((k) => k !== key) }, `Removed document “${doc.name}”`);
 }
 
-/** Sends the documents to the consultant: the first time, or again as an update listing what changed. */
+/** Submits the documents for DPR preparation: the first time, or again as an update listing what changed. */
 export function submit(d: DprDocuments, now = new Date()): DprDocuments {
   if (!canSubmit(d)) return d;
   const changes = changesSinceSubmit(d).map((c) => c.text);

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from 'react';
+import { Suspense, useEffect, useRef, useState, type FormEvent } from 'react';
 import { NavLink, Outlet, useLocation, useNavigate } from 'react-router-dom';
 import { PanelLeft, Search, X } from 'lucide-react';
 import logoUrl from '@/assets/prasanna-logo.png';
@@ -201,7 +201,9 @@ export function AppLayout() {
           </header>
 
           <main id="main" tabIndex={-1} className="min-w-0 flex-1 overflow-y-auto focus:outline-none">
-            <Outlet />
+            <Suspense fallback={<p className="px-6 py-8 text-sm text-gray-500">Loading…</p>}>
+              <Outlet />
+            </Suspense>
           </main>
         </div>
       </div>

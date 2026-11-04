@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link } from 'react-router-dom';
-import { CheckCircle2, CircleSlash, Clock, FileStack, FolderOpen, Plus, TriangleAlert } from 'lucide-react';
+import { CheckCircle2, Send, CircleSlash, FileStack, FolderOpen, Plus, TriangleAlert } from 'lucide-react';
 import { Card } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -8,9 +8,8 @@ import { ActiveDprPicker } from '@/features/dprs/ActiveDprPicker';
 import { DprSummaryHeader } from '@/features/dprs/DprSummaryHeader';
 import { useActiveDpr } from '@/features/dprs/useActiveDpr';
 import { useToast } from '@/lib/toast';
-import { BOQ_DOCUMENTS, useReadBoqFiles, useRemoveBoqRead } from '@/features/boq-import/api';
 import { useDprDocuments, useUpdateDocuments } from './api';
-import { DOCUMENT_GROUPS } from './catalog';
+import { DOCUMENT_GROUPS, pdfOnly } from './catalog';
 import { DocumentTable } from './DocumentTable';
 import { RequestDraftsCard } from './RequestDraftsCard';
 import { deleteFile, putFiles } from '@/lib/fileStore';
@@ -23,7 +22,7 @@ const MAX_FILE_BYTES = 25 * 1024 * 1024;
 function SummaryStrip({ counts }: { counts: ReturnType<typeof countStatuses> }) {
   const items = [
     { label: 'Uploaded', value: counts.uploaded, icon: CheckCircle2, tone: 'text-emerald-600' },
-    { label: 'Pending', value: counts.pending, icon: Clock, tone: 'text-amber-600' },
+    { label: 'Submitted', value: counts.submitted, icon: Send, tone: 'text-violet-600' },
     { label: 'Not ready', value: counts.notReady, icon: TriangleAlert, tone: 'text-rose-600' },
     { label: 'N/A', value: counts.notApplicable, icon: CircleSlash, tone: 'text-gray-500' },
   ];
@@ -56,8 +55,6 @@ export function DocumentsPage() {
 
   const documents = useDprDocuments(activeId);
   const update = useUpdateDocuments(activeId);
-  const readBoq = useReadBoqFiles(activeId);
-  const removeRead = useRemoveBoqRead(activeId);
   const docs = documents.data ?? EMPTY_DOCUMENTS;
   const submitted = Boolean(docs.submittedAt);
   const changes = changesSinceSubmit(docs);
@@ -68,7 +65,11 @@ export function DocumentsPage() {
     setDpr(id);
   };
 
-  const attach = (spec: { key: string; name: string }, files: File[]) => {
+  const attach = (spec: { key: string; name: string }, picked: File[]) => {
+    let files = picked;
+    const notPdf = pdfOnly(spec.key) ? files.filter((f) => !/\.pdf$/i.test(f.name)) : [];
+    if (notPdf.length) toast({ title: 'PDF only', description: `${spec.name} takes the BOQ PDF as received. Upload the estimated BOQ workbook in DPR Preparation, Estimate tab. Skipped: ${notPdf.map((f) => f.name).join(', ')}.`, tone: 'error' });
+    files = files.filter((f) => !notPdf.includes(f));
     const tooBig = files.filter((f) => f.size > MAX_FILE_BYTES);
     const ok = files.filter((f) => f.size <= MAX_FILE_BYTES);
     if (tooBig.length) toast({ title: 'File too large', description: `${tooBig.map((f) => f.name).join(', ')} is over 25 MB.`, tone: 'error' });
@@ -79,39 +80,19 @@ export function DocumentsPage() {
     update.mutate((d) => addFiles(d, spec.key, added), {
       onSuccess: () => toast({ title: `${ok.length === 1 ? 'File' : `${ok.length} files`} added`, description: spec.name }),
     });
-    if (BOQ_DOCUMENTS[spec.key]) readBoqFiles(spec.key, ok);
   };
-
-  // BOQ workbooks are read straight away so DPR Preparation can offer their items for review.
-  const readBoqFiles = (docKey: string, files: File[]) =>
-    readBoq.mutate(
-      { docKey, files },
-      {
-        onSuccess: ({ results, unreadable }) => {
-          for (const r of results) {
-            toast(
-              r.failure
-                ? { title: `Could not read ${r.fileName}`, description: r.failure, tone: 'error' }
-                : { title: `Read ${r.items.length} items from ${r.fileName}`, description: 'Review and import them in DPR Preparation.' },
-            );
-          }
-          if (unreadable.length) toast({ title: 'Attached, not read', description: `Quantities are read from .xlsx files only: ${unreadable.join(', ')}.`, tone: 'info' });
-        },
-      },
-    );
 
   const remove = (spec: { key: string }, index: number) => {
     const name = filesOf(docs, spec.key)[index]?.name;
     update.mutate((d) => removeFile(d, spec.key, index));
     if (name && !filesOf(docs, spec.key).some((f, i) => i !== index && f.name === name)) void deleteFile(activeId, spec.key, name);
-    if (name && BOQ_DOCUMENTS[spec.key] && !filesOf(docs, spec.key).some((f, i) => i !== index && f.name === name)) removeRead.mutate({ docKey: spec.key, fileName: name });
   };
 
   const send = () => {
     update.mutate(submit, {
       onSuccess: () => {
         setConfirming(false);
-        toast({ title: submitted ? 'Update sent to consultant' : 'Submitted to consultant', description: activeId });
+        toast({ title: submitted ? 'Update submitted for DPR preparation' : 'Submitted for DPR preparation', description: activeId });
       },
     });
   };
@@ -148,8 +129,8 @@ export function DocumentsPage() {
         {submitted && (
           <div role="status" className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-[13px] text-gray-700">
             <p>
-              Last sent to the consultant on {when(docs.submittedAt!)}
-              {(docs.submissions?.length ?? 0) > 1 && ` (${docs.submissions!.length} submissions)`}. You can still add, remove or change documents and send an update.
+              Last submitted for DPR preparation on {when(docs.submittedAt!)}
+              {(docs.submissions?.length ?? 0) > 1 && ` (${docs.submissions!.length} submissions)`}. You can still add, remove or change documents and submit an update.
             </p>
             {changes.length > 0 && (
               <>
@@ -194,18 +175,18 @@ export function DocumentsPage() {
         <div className="flex flex-wrap items-center gap-3 pt-2">
           {confirming ? (
             <div role="alertdialog" aria-label="Confirm submission" className="flex flex-wrap items-center gap-3 rounded-lg border border-gray-200 bg-white px-4 py-3 text-[13px]">
-              <span className="text-gray-700">{submitted ? `Send an update with ${changes.length} ${changes.length === 1 ? 'change' : 'changes'} to the consultant?` : 'Send these documents to the consultant? You can still change them and send an update later.'}</span>
+              <span className="text-gray-700">{submitted ? `Submit an update with ${changes.length} ${changes.length === 1 ? 'change' : 'changes'} for DPR preparation?` : 'Submit these documents for DPR preparation? You can still change them and submit an update later.'}</span>
               <button type="button" className="btn-secondary" onClick={() => setConfirming(false)}>
                 Cancel
               </button>
               <button type="button" className="btn-primary" onClick={send} disabled={update.isPending}>
-                {submitted ? 'Yes, send update' : 'Yes, submit'}
+                {submitted ? 'Yes, submit update' : 'Yes, submit'}
               </button>
             </div>
           ) : (
             <>
               <button type="button" className="btn-primary" disabled={!canSubmit(docs)} onClick={() => setConfirming(true)}>
-                {submitted ? 'Send update to Consultant' : 'Submit to Consultant'}
+                {submitted ? 'Submit update for DPR preparation' : 'Submit for DPR preparation'}
               </button>
               {submitted && !changes.length && <p className="text-xs text-gray-500">Nothing has changed since the last submission.</p>}
               {missing.length > 0 && (
@@ -222,7 +203,7 @@ export function DocumentsPage() {
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-8 sm:px-6 lg:px-8">
-      <PageHeader title="Documents" description="Attach the documents each DPR needs, then send them to the consultant." />
+      <PageHeader title="Documents" description="Attach the documents each DPR needs, then submit them for DPR preparation." />
       <div className="space-y-4">
         <ActiveDprPicker rows={rows} value={activeId} onChange={choose} />
         {active && <DprSummaryHeader dpr={active} />}

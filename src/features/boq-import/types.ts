@@ -39,6 +39,8 @@ export interface ParsedItem {
   srRef?: string;
   /** SoR item code in its own column ("SR Code"), e.g. "1.10". */
   srCode?: string;
+  /** Headings above the item (its group and sub-group), for matching it to the rate catalog. */
+  group?: string;
   issues: Issue[];
 }
 
@@ -115,6 +117,8 @@ export type ColumnRole =
   | 'description'
   | 'unit'
   | 'qty'
+  /** "TOTAL Quantity" = Quantity × Unit weight, on line sheets. The amounts are worked on it. */
+  | 'totalQty'
   | 'supplyRate'
   | 'erectionRate'
   | 'testingRate'

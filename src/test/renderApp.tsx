@@ -1,7 +1,10 @@
 import { render } from '@testing-library/react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { createMemoryRouter, RouterProvider } from 'react-router-dom';
-import { routes, routerFuture } from '@/app/router';
+import { preloadPages, routes, routerFuture } from '@/app/router';
+
+// Pages load on first visit in the app; tests render them straight away.
+await preloadPages();
 
 /** Renders the whole app at `path` with a fresh query cache. */
 export function renderAt(path: string) {

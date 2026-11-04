@@ -1,8 +1,8 @@
 import type { StatedAbstract } from '@/features/boq-import/types';
-import { abstractOf, hasLineWorks } from '@/features/preparation/calc';
-import { mvaFromCapacity } from '@/features/preparation/finance';
+import { abstractOf, hasLineWorks, sectionTotals, type TotalKey } from '@/features/preparation/calc';
+import { isBcrExempt, mvaFromCapacity } from '@/features/preparation/finance';
 import { loadFigures } from '@/features/preparation/load';
-import type { Estimate } from '@/features/preparation/types';
+import type { Estimate, EstimateLine } from '@/features/preparation/types';
 import type { DprRow } from '@/features/reports/types';
 import type { DprContent } from './content';
 
@@ -94,8 +94,8 @@ export function crossChecks(dpr: DprRow, e: Estimate, content: DprContent, abstr
     }
   }
 
-  // 3. BCR inputs.
-  const added = e.financials?.method !== 'manual' ? e.financials?.inputs?.addedMva ?? 0 : 0;
+  // 3. BCR inputs (none for pure line works, ADR-0007).
+  const added = !isBcrExempt(e) && e.financials?.method !== 'manual' ? e.financials?.inputs?.addedMva ?? 0 : 0;
   if (total && added > total + 0.01) {
     out.push({ id: 'bcr-mva', severity: 'blocker', step: 'finance', message: `The BCR assumes ${fmt(added)} MVA added, more than the DPR's ${dpr.capacity}.` });
   }
@@ -107,7 +107,17 @@ export function crossChecks(dpr: DprRow, e: Estimate, content: DprContent, abstr
     out.push({ id: 'load-after', severity: 'warning', step: 'finance', message: `Even after the work the loading factor is ${load.after.toFixed(2)}: the added capacity does not cover the recorded peak.` });
   }
 
-  // 4. Totals stated on the workbook's abstract sheets (the largest per part, as on import).
+  // 4. Totals stated on the workbook's abstract sheets.
+  out.push(...abstractChecks(e, abstracts));
+
+  // 5. The estimate's own arithmetic.
+  out.push(...estimateChecks(e));
+  return out;
+}
+
+/** Each abstract against the total the workbook's own abstract sheet states (the largest per part, as on import). */
+export function abstractChecks(e: Estimate, abstracts: StatedAbstract[]): CrossCheck[] {
+  const out: CrossCheck[] = [];
   const parts: StatedAbstract['part'][] = hasLineWorks(e) ? ['I', 'line'] : ['I'];
   if (e.lines.some((l) => l.section === 'dismantling')) parts.push('II');
   for (const part of parts) {
@@ -115,10 +125,79 @@ export function crossChecks(dpr: DprRow, e: Estimate, content: DprContent, abstr
     if (!stated) continue;
     const statedLakh = stated.total! / 1e5;
     const ours = abstractOf(e, part).find((r) => r.key === 'total')!.lakhs;
-    if (Math.abs(statedLakh - ours) > Math.max(0.05, statedLakh * 0.005)) {
+    // Both are shown to 0.01 lakh (Rs 1,000), so anything more than that apart is a real difference.
+    if (Math.abs(statedLakh - ours) > 0.0105) {
       const name = part === 'line' ? 'Line works' : `Abstract-${part}`;
-      out.push({ id: `abstract:${part}`, severity: 'warning', step: 'estimate', message: `${name} comes to ${fmt(ours)} lakh, but “${stated.sheet.trim()}” in the workbook states ${fmt(statedLakh)} lakh.` });
+      out.push({
+        id: `abstract:${part}`,
+        severity: 'blocker',
+        step: 'estimate',
+        message: `${name} comes to ${fmt(ours)} lakh, but “${stated.sheet.trim()}” in the workbook states ${fmt(statedLakh)} lakh (difference ${fmt(ours - statedLakh)} lakh).`,
+      });
     }
+  }
+  return out;
+}
+
+const MISC_LABEL: Record<TotalKey, string> = {
+  supply: 'Part A supply',
+  erection: 'Part A erection',
+  testing: 'Part A T&C',
+  civil: 'Part B civil',
+  dismantling: 'Dismantling',
+  lineSupply: 'Line supply',
+  lineErection: 'Line erection',
+  lineTesting: 'Line T&C',
+  lineCivil: 'Line civil',
+};
+
+/**
+ * Mistakes inside the estimate itself: rows imported twice, a "Miscellaneous" amount that is negative or
+ * out of all proportion to the items, and quantities that are not whole numbers where only whole ones
+ * make sense. (Items with no rate are already on the checklist.)
+ */
+export function estimateChecks(e: Estimate): CrossCheck[] {
+  const out: CrossCheck[] = [];
+  // The same file row twice: the usual cause is importing the BOQ again with "Add to the estimate".
+  const bySource = new Map<string, EstimateLine[]>();
+  for (const l of e.lines) {
+    // Only rows read from a file carry a "sheet row N" source; template lines all share one source.
+    if (!l.source || !/ row \d+/.test(l.source)) continue;
+    const key = `${l.section}|${l.source}`;
+    bySource.set(key, [...(bySource.get(key) ?? []), l]);
+  }
+  const doubled = [...bySource.values()].filter((ls) => ls.length > 1);
+  if (doubled.length) {
+    const first = doubled[0]![0]!;
+    out.push({
+      id: 'dup-rows',
+      severity: 'blocker',
+      step: 'estimate',
+      message: `${doubled.length} BOQ ${doubled.length === 1 ? 'row is' : 'rows are'} in the estimate more than once (e.g. ${first.code || first.description.slice(0, 40)}, from ${first.source}). Remove the copies, or import the BOQ again with “Replace”.`,
+    });
+  }
+
+  const { subTotal, total } = sectionTotals(e);
+  for (const key of Object.keys(MISC_LABEL) as TotalKey[]) {
+    const misc = e.misc[key] ?? 0;
+    if (misc < 0) {
+      out.push({ id: `misc-neg:${key}`, severity: 'blocker', step: 'estimate', message: `${MISC_LABEL[key]}: “Miscellaneous” is negative (Rs ${fmt(misc)}), which takes Rs ${fmt(-misc)} off the items.` });
+    } else if (misc > 0 && subTotal[key] > 0 && misc > subTotal[key] * 0.05) {
+      out.push({
+        id: `misc-big:${key}`,
+        severity: 'warning',
+        step: 'estimate',
+        message: `${MISC_LABEL[key]}: “Miscellaneous” is Rs ${fmt(misc)}, ${fmt((misc / subTotal[key]) * 100)}% of the items (Rs ${fmt(subTotal[key])}). It is usually a small round-off to Rs ${fmt(total[key])}.`,
+      });
+    } else if (misc > 0 && subTotal[key] === 0) {
+      out.push({ id: `misc-alone:${key}`, severity: 'warning', step: 'estimate', message: `${MISC_LABEL[key]}: “Miscellaneous” Rs ${fmt(misc)} is set, but there are no items in that part.` });
+    }
+  }
+
+  const fractional = e.lines.filter((l) => /^(no|nos|no's|set|sets|each)\.?$/i.test(l.unit.trim()) && Math.abs(l.qty - Math.round(l.qty)) > 1e-9);
+  if (fractional.length) {
+    const l = fractional[0]!;
+    out.push({ id: 'qty-fraction', severity: 'warning', step: 'estimate', message: `${fractional.length} ${fractional.length === 1 ? 'item is' : 'items are'} counted in ${l.unit} but ${fractional.length === 1 ? 'has' : 'have'} a part quantity (e.g. ${l.code || l.description.slice(0, 40)}: ${l.qty}).` });
   }
   return out;
 }
