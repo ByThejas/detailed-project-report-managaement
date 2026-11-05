@@ -88,6 +88,10 @@ describe('DPR Preparation', () => {
     const electrical = screen.getByRole('region', { name: 'Electrical BOQ (Part A)' });
     expect(within(electrical).getAllByRole('spinbutton', { name: /Supply rate/ })[0]).toHaveValue(20_715_000);
     expect(within(electrical).getByText(/Rates: SoR 2023-24 · By code 1\.11/)).toBeInTheDocument();
+    // The choice is remembered: the same wording is offered 1.11 first from now on.
+    await userEvent.click(within(card).getByRole('checkbox', { name: 'Only items without a rate' }));
+    const again = within(card).getByRole('table', { name: 'Rate suggestions' });
+    expect(within(again).getAllByRole('combobox')[0]).toHaveTextContent(/Your earlier choice · 1\.11/);
   });
 
   it('works out B/C ratio, IRR and payback the KPTCL way from the BCR inputs', async () => {
@@ -146,6 +150,36 @@ describe('DPR Preparation', () => {
     await userEvent.clear(months);
     await userEvent.type(months, '9');
     expect(within(pert).getByRole('status')).toHaveTextContent('stages run to M14, past the 6-month completion period');
+  });
+
+  it('adds SoR erection per tonne and per tonne-metre from the weight given, and multiplies every rate by the quantity', async () => {
+    seed([row({ ...KOGALI, capacity: '1x12.5 MVA', voltage: '110 kV' })]);
+    renderAt(url);
+    await openStep('Estimate');
+    const card = screen.getByRole('region', { name: 'Price from the rate catalog' });
+    await userEvent.click(within(card).getByRole('button', { name: 'Find rates' }));
+    const table = await within(card).findByRole('table', { name: 'Rate suggestions' }, { timeout: 8000 });
+    await userEvent.selectOptions(within(table).getAllByRole('combobox')[0]!, 'SoR code typed by hand…');
+    await userEvent.type(within(table).getByRole('textbox', { name: /SoR code for/ }), '1.11');
+    // SoR 1.11 erection: Rs 80 per t/m of moving and Rs 1,134 per t, so it needs the weight and the distance.
+    expect(within(table).getByText(/Not added \(needs a basis above\): 80 per t\/m, 1134 per t/)).toBeInTheDocument();
+    await userEvent.type(within(table).getByRole('spinbutton', { name: /Weight per No in tonnes/ }), '30');
+    await userEvent.type(within(table).getByRole('spinbutton', { name: /Moving distance in metres/ }), '50');
+    expect(within(table).queryByText(/Not added/)).not.toBeInTheDocument();
+    await userEvent.click(within(table).getAllByRole('checkbox')[0]!);
+    await userEvent.click(within(card).getByRole('button', { name: 'Apply rates to 1 item' }));
+
+    const electrical = screen.getByRole('region', { name: 'Electrical BOQ (Part A)' });
+    // 80 × 30 t × 50 m + 1,134 × 30 t; T&C 14,180 + 56,979.
+    expect(within(electrical).getAllByRole('spinbutton', { name: /Erection rate/ })[0]).toHaveValue(154_020);
+    expect(within(electrical).getAllByRole('spinbutton', { name: /Testing rate/ })[0]).toHaveValue(71_159);
+    const qty = within(electrical).getAllByRole('spinbutton', { name: /Quantity/ })[0]!;
+    await userEvent.clear(qty);
+    await userEvent.type(qty, '2');
+    const line = qty.closest('tr')!;
+    expect(line).toHaveTextContent('4,14,30,000');
+    expect(line).toHaveTextContent('3,08,040');
+    expect(line).toHaveTextContent('1,42,318');
   });
 
   it('recalculates the abstract when a quantity changes and keeps the edit', async () => {

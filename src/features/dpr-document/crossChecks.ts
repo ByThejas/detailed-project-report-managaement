@@ -199,6 +199,27 @@ export function estimateChecks(e: Estimate): CrossCheck[] {
     const l = fractional[0]!;
     out.push({ id: 'qty-fraction', severity: 'warning', step: 'estimate', message: `${fractional.length} ${fractional.length === 1 ? 'item is' : 'items are'} counted in ${l.unit} but ${fractional.length === 1 ? 'has' : 'have'} a part quantity (e.g. ${l.code || l.description.slice(0, 40)}: ${l.qty}).` });
   }
+
+  // The same item (same part, heading, wording and unit) at two supply rates. None of 21 KPTCL estimate
+  // workbooks does this, so it is almost always a typing or copying slip.
+  const norm = (t: string) => t.toLowerCase().replace(/\s+/g, ' ').trim();
+  const sameItem = new Map<string, EstimateLine[]>();
+  for (const l of e.lines) {
+    if (!(l.supplyRate > 0) || !l.description.trim()) continue;
+    const key = [l.section, norm(l.group ?? ''), norm(l.description), norm(l.unit)].join('|');
+    sameItem.set(key, [...(sameItem.get(key) ?? []), l]);
+  }
+  for (const ls of sameItem.values()) {
+    const rates = [...new Set(ls.map((l) => l.supplyRate))];
+    if (rates.length < 2) continue;
+    const l = ls[0]!;
+    out.push({
+      id: `rate-mismatch:${l.section}:${norm(l.description).slice(0, 60)}`,
+      severity: 'warning',
+      step: 'estimate',
+      message: `“${l.description.slice(0, 60)}” (${l.unit}) appears ${ls.length} times at different supply rates: ${rates.map((r) => `Rs ${fmt(r)}`).join(', ')}.`,
+    });
+  }
   return out;
 }
 

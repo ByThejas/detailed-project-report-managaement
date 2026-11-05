@@ -70,6 +70,20 @@ describe('cross-checks', () => {
     expect(estimateChecks(buildTemplate(dpr)).filter((c) => c.id === 'dup-rows')).toEqual([]);
   });
 
+  it('warns when the same item is priced at two rates', () => {
+    const e = buildTemplate(dpr);
+    const a = { ...e.lines[0]!, id: 'y1', description: 'Vibration Dampers', unit: 'Nos', supplyRate: 916 };
+    e.lines = [...e.lines, a, { ...a, id: 'y2', description: 'vibration  dampers' }];
+    expect(estimateChecks(e).filter((c) => c.id.startsWith('rate-mismatch'))).toEqual([]);
+    e.lines.push({ ...a, id: 'y3', supplyRate: 9160 });
+    const [w] = estimateChecks(e).filter((c) => c.id.startsWith('rate-mismatch'));
+    expect(w).toMatchObject({ severity: 'warning', step: 'estimate' });
+    expect(w!.message).toContain('3 times at different supply rates: Rs 916, Rs 9160');
+    // The same words under another heading (new against existing towers) may differ.
+    e.lines[e.lines.length - 1] = { ...a, id: 'y3', supplyRate: 1289, group: 'On existing towers' };
+    expect(estimateChecks(e).filter((c) => c.id.startsWith('rate-mismatch'))).toEqual([]);
+  });
+
   it('works out the loading factor as the Thyavanige DPR does', () => {
     const load = { existing: '1x12.5 MVA', peakMw: 10.6, replacedMva: 0, powerFactor: 0.85 };
     const f = loadFigures(load, '1x20 MVA')!;

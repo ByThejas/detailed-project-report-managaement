@@ -38,14 +38,21 @@ const SYNONYMS: [RegExp, string][] = [
   [/\balumin(?:i)?um\b/g, 'aluminium'],
   [/\bm\.\s*s\.?\s/g, 'ms '],
   [/\bmild\s+steel\b/g, 'ms'],
+  // Surge arrester duty: "class - II", "class 2" and "Discharge Class 2" are one rating.
+  [/\bclass\s*[-:]?\s*(?:iii|3)\b/g, 'class3'],
+  [/\bclass\s*[-:]?\s*(?:ii|2)\b/g, 'class2'],
   [/\bhigh\s+tensile(?:\s+steel)?\b/g, 'ht'],
 ];
 
 /** Plural and singular are the same word: "cables" = "cable", "isolators" = "isolator". */
 const singular = (t: string) => (t.length > 3 && /[a-z]s$/.test(t) && !/(ss|us|is)$/.test(t) ? t.slice(0, -1) : t);
 
+/** CT ratios ("800-400/1-1-1 A", "200-100/ l-l-lA") as one token each, so 800-400 is never taken for 200-100. */
+const ratios = (lower: string) => [...lower.matchAll(/(\d+(?:\s*-\s*\d+)+)\s*\/\s*[1l](?:\s*-\s*[1l])*/g)].map((m) => `ratio${m[1]!.replace(/\s/g, '').replace(/-/g, 'x')}`);
+
 export function tokens(text: string): string[] {
   let lower = text.toLowerCase();
+  const ctRatios = ratios(lower);
   for (const [re, to] of SYNONYMS) lower = lower.replace(re, to);
   // "without earth switch" is not "with earth switch": keep the negated word as its own token.
   lower = lower.replace(/\bwithout\s+([a-z]+)/g, 'without$1 $1');
@@ -67,7 +74,7 @@ export function tokens(text: string): string[] {
     const next = parts[i + 1];
     if (/^\d/.test(t) && next && RATING_UNITS.has(next)) out.push(`${t}${next}`);
   });
-  return out;
+  return [...out, ...ctRatios];
 }
 
 type UnitKind = 'count' | 'length' | 'km' | 'weight' | 'weightDistance' | 'volume' | 'area' | 'lump' | 'other';
@@ -110,7 +117,8 @@ const EQUIPMENT_KV: Record<number, number> = { 12: 11, 36: 33, 72.5: 66, 123: 11
 
 /** The highest voltage class (kV) named in a text, e.g. "110/11 kV" → 110. Null when none is named. */
 export function highestKv(text: string): number | null {
-  const found = [...text.toLowerCase().matchAll(/(\d+(?:\.\d+)?)\s*\/?\s*(?:\d+(?:\.\d+)?\s*\/?\s*)*kv\b/g)].map((m) => EQUIPMENT_KV[Number(m[1])] ?? Number(m[1]));
+  // "110/33-11 kV" is a 110 kV item: the first of a run of voltages joined by "/" or "-" is the highest.
+  const found = [...text.toLowerCase().matchAll(/(\d+(?:\.\d+)?)\s*(?:[/-]\s*\d+(?:\.\d+)?\s*)*kv\b/g)].map((m) => EQUIPMENT_KV[Number(m[1])] ?? Number(m[1]));
   return found.length ? Math.max(...found) : null;
 }
 
@@ -144,6 +152,8 @@ export interface RateSuggestion {
   unitMatches: boolean;
   /** The line names this item by its SoR code. */
   exact?: boolean;
+  /** The user chose this item before for the same wording. */
+  remembered?: boolean;
 }
 
 /**
@@ -185,8 +195,38 @@ export const tonnesOf = (unit: string): number | null => {
 };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+const r3 = (n: number) => Math.round(n * 1000) / 1000;
 
-type LineBasis = Pick<EstimateLine, 'unit' | 'section'> & { qty?: number };
+/**
+ * How to turn SoR labour and T&C given per Set, per tonne or per tonne-metre into a rate per No of the
+ * line. The estimator chooses these: KPTCL estimates count a Set as 1 No for some items and 3 Nos for others.
+ */
+export interface LabourBasis {
+  /** Nos in one Set of the SoR's labour rate (1 or 3). */
+  setNos?: number;
+  /** Weight of one No of the line, tonnes. */
+  tonnes?: number;
+  /** Moving distance for per tonne-metre rates (transformer haulage), metres. */
+  metres?: number;
+}
+
+/** "Set" or "Set (3 Nos.)": a count of sets, which a line in Nos can only use once the estimator says what a Set is. */
+export const isSetBasis = (basis: string) => basis === 'set' || /^set of \d+$/.test(basis);
+/** The Nos in one Set that a unit states, e.g. 3 for "Set (3 Nos.)". */
+export const nosInSet = (unit: string) => {
+  const b = unitBasis(unit);
+  return /^set of \d+$/.test(b) ? Number(b.slice(7)) : undefined;
+};
+
+type LineBasis = Pick<EstimateLine, 'unit' | 'section'> & { qty?: number; basis?: LabourBasis };
+
+/** Weight of one No from the BOQ: "(0.532 t per structure)" in the text, or "No (0.474 MT)" over the quantity. */
+export function tonnesPerNo(line: Pick<EstimateLine, 'description' | 'unit' | 'qty'>): number | undefined {
+  const m = /(\d+(?:\.\d+)?)\s*(?:t|mt|tonnes?)\s*(?:per|\/)\s*(?:structure|no|unit|set)/i.exec(line.description);
+  if (m) return Number(m[1]);
+  const total = tonnesOf(line.unit);
+  return total && line.qty > 0 ? total / line.qty : undefined;
+}
 
 /**
  * Child rates that apply per unit of the line, and those that need another basis. A per-tonne rate is
@@ -194,35 +234,47 @@ type LineBasis = Pick<EstimateLine, 'unit' | 'section'> & { qty?: number };
  * structures and towers (erection Rs/MT × tonnes ÷ number).
  */
 function splitChildren(children: CatalogChildRate[], line: LineBasis, itemUnit: string) {
-  let total = 0;
+  let sum = 0;
   const notApplied: CatalogChildRate[] = [];
   const converted: string[] = [];
   const lb = unitBasis(line.unit);
   const ib = unitBasis(itemUnit);
-  const tonnes = tonnesOf(line.unit);
+  const b = line.basis ?? {};
+  const lineTonnes = tonnesOf(line.unit);
+  const tonnes = b.tonnes ?? (lineTonnes && line.qty && line.qty > 0 ? lineTonnes / line.qty : undefined);
   for (const c of children) {
     const cb = unitBasis(c.unit);
     const f = lb !== 'other' && cb !== 'other' ? unitFactor(line.unit, c.unit) : null;
-    if (lb !== 'other' && cb === lb) total += c.rate;
+    if (lb !== 'other' && cb === lb) sum += c.rate;
     else if (f !== null && f !== 1) {
-      total += c.rate * f;
+      sum += c.rate * f;
       converted.push(`${formatRate(c.rate)} per ${c.unit} × ${f} = ${formatRate(r2(c.rate * f))} per ${line.unit}`);
     }
     // A child with no readable unit is taken to be in the item's own unit.
-    else if (cb === 'other' && lb !== 'other' && lb === ib) total += c.rate;
-    else if (cb === 'weight' && lb === 'no' && tonnes && line.qty && line.qty > 0) {
-      const perNo = (c.rate * tonnes) / line.qty;
-      total += perNo;
-      converted.push(`${formatRate(c.rate)} per ${c.unit} × ${tonnes} MT ÷ ${line.qty} = ${formatRate(r2(perNo))} per No`);
+    else if (cb === 'other' && lb !== 'other' && lb === ib) sum += c.rate;
+    else if (cb === 'weight' && lb === 'no' && tonnes) {
+      sum += c.rate * tonnes;
+      converted.push(`${formatRate(c.rate)} per ${c.unit} × ${r3(tonnes)} t = ${formatRate(r2(c.rate * tonnes))} per No`);
+    } else if (cb === 'weightDistance' && lb === 'no' && tonnes && b.metres) {
+      sum += c.rate * tonnes * b.metres;
+      converted.push(`${formatRate(c.rate)} per ${c.unit} × ${r3(tonnes)} t × ${b.metres} m = ${formatRate(r2(c.rate * tonnes * b.metres))} per No`);
+    } else if (isSetBasis(cb) && lb === 'no' && b.setNos) {
+      // The estimator says how many Nos of the BOQ make one Set of the SoR.
+      sum += c.rate / b.setNos;
+      converted.push(`${formatRate(c.rate)} per ${c.unit} ÷ ${b.setNos} = ${formatRate(r2(c.rate / b.setNos))} per No`);
     } else notApplied.push(c);
   }
-  return { total, notApplied, converted };
+  return { total: sum, notApplied, converted };
 }
 
 const formatRate = (n: number) => n.toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
 const OPPOSITES: [string, string][] = [
   ['indoor', 'outdoor'],
+  // Surge arrester duty: station medium (SM, class 3) against station low (SL, class 2).
+  ['sm', 'sl'],
+  ['class3', 'class2'],
+  ['single', 'twin'],
   ['copper', 'aluminium'],
   ['ms', 'ht'],
   ['pcvcb', 'mcvcb'],
@@ -290,10 +342,24 @@ export function suggestRates(index: RateIndex, line: LineBasis & Pick<EstimateLi
     }
     // A unit that converts (km against a rate per metre) is as good as the same unit.
     if (lu !== iu && unitFactor(line.unit, item.unit) !== null) score /= (lu === 'count') !== (iu === 'count') ? 0.5 : 0.7;
-    // Opposites: an indoor kit is not an outdoor one, copper is not aluminium.
+    // Opposites: an indoor kit is not an outdoor one, copper is not aluminium. An item naming both
+    // ("Indoor/Outdoor 11 kV CT … OUTDOOR") is the one its text names last.
     for (const [a, b] of OPPOSITES) {
-      if ((own.has(a) || fromGroup.has(a)) && s.has(b) && !s.has(a)) score *= 0.6;
-      if ((own.has(b) || fromGroup.has(b)) && s.has(a) && !s.has(b)) score *= 0.6;
+      let ia = s.has(a);
+      let ib = s.has(b);
+      if (ia && ib) {
+        const order = tokens(item.item);
+        ia = order.lastIndexOf(a) > order.lastIndexOf(b);
+        ib = !ia;
+      }
+      if ((own.has(a) || fromGroup.has(a)) && ib && !ia) score *= 0.6;
+      if ((own.has(b) || fromGroup.has(b)) && ia && !ib) score *= 0.6;
+    }
+    // A different CT ratio is a different CT.
+    const lineRatios = [...own].filter((t) => t.startsWith('ratio'));
+    if (lineRatios.length) {
+      const theirs = [...s].filter((t) => t.startsWith('ratio'));
+      if (theirs.length && !lineRatios.some((t) => s.has(t))) score *= 0.55;
     }
     // Hardware for Moose conductor is not hardware for Coyote.
     const lineCond = CONDUCTORS.filter((c) => own.has(c) || fromGroup.has(c));
@@ -315,7 +381,9 @@ export function suggestionFor(item: CatalogItem, line: LineBasis, score = 1, sha
   const tc = splitChildren(item.tc, line, item.unit);
   const lb = unitBasis(line.unit);
   const ib = unitBasis(item.unit);
-  const f = unitFactor(line.unit, item.unit);
+  const setNos = line.basis?.setNos;
+  // A supply rate per Set on a line in Nos, once the estimator has said how many Nos a Set is.
+  const f = lb === 'no' && isSetBasis(ib) && setNos ? 1 / setNos : unitFactor(line.unit, item.unit);
   return {
     item,
     score,
@@ -351,6 +419,7 @@ export function applySuggestion(line: EstimateLine, s: RateSuggestion): { line: 
       erectionRate: pick(s.erectionRate, line.erectionRate, 'erection'),
       testingRate: pick(s.testingRate, line.testingRate, 'testing'),
       rateRef: rateRefOf(s),
+      labourNotAdded: multi && s.notApplied.length ? s.notApplied.map((n) => `Rs ${formatRate(n.rate)} per ${n.unit}`).join(', ') : undefined,
     },
     kept,
   };
@@ -397,4 +466,92 @@ export function exactCodeMatch(index: RateIndex, line: LineBasis & Pick<Estimate
   const s = suggestionFor(item, line, 1);
   const lb = unitBasis(line.unit);
   return lb !== 'other' && unitFactor(line.unit, item.unit) !== null ? { ...s, exact: true } : null;
+}
+
+/** A rate in the estimate far from the SoR item the line surely is. */
+export interface OddRate {
+  line: EstimateLine;
+  /** The SoR item: named by the line's SR code, or a close match (same numbers, unit and near-identical wording). */
+  match: RateSuggestion;
+  /** The line's supply rate divided by the SoR rate, both in the line's unit. */
+  ratio: number;
+  /** In words, after "The rate": "is 3.2× the SoR rate". */
+  why: string;
+}
+
+/** The catalog item a line's rate was taken from, read back from its rateRef ("SoR 2023-24 · By code 1.13 · p25"). */
+export function itemOfRateRef(index: RateIndex, rateRef: string | undefined): CatalogItem | null {
+  const m = /^SoR [^·]*·\s*(.+?)\s+(\S+?)(?:\s+·|$)/.exec(rateRef ?? '');
+  if (!m) return null;
+  return index.items.find((i) => i.sheet === m[1] && i.code === m[2]) ?? null;
+}
+
+/** How far a rate may sit from its SoR item before it is shown: 1.5× either way. */
+export const ODD_RATE_FACTOR = 1.5;
+
+/**
+ * Rates already in the estimate that are far from the SoR item the line names or very closely matches.
+ * Only exact-code and close matches are used: on 21 KPTCL workbooks they flag none of the real rates, while
+ * looser matches flag mostly wrong matches, not wrong rates.
+ */
+export function oddRates(index: RateIndex, lines: EstimateLine[]): OddRate[] {
+  const out: OddRate[] = [];
+  for (const line of lines) {
+    if (!(line.supplyRate > 0) || !line.description.trim() || line.section === 'dismantling' || isLabourOnly(line.description)) continue;
+    // A rate taken from an SoR item of another voltage or size (an 8 MVA 66/11 kV transformer for a 110/11 kV line).
+    const priced = itemOfRateRef(index, line.rateRef);
+    const diffs = priced ? ratingDifferences(line, priced) : [];
+    if (priced && diffs.length) {
+      const s = suggestionFor(priced, line);
+      out.push({ line, match: s, ratio: s.supplyRate ? line.supplyRate / s.supplyRate : 1, why: `was priced from SoR ${priced.code}, which is ${diffs.join(' and ')}` });
+      continue;
+    }
+    let match = exactCodeMatch(index, line);
+    if (!match) {
+      const top = suggestRates(index, line, 1)[0];
+      match = top && isReliable(line, top) ? top : null;
+    }
+    if (!match || !(match.supplyRate > 0) || !match.unitMatches) continue;
+    const ratio = line.supplyRate / match.supplyRate;
+    if (ratio <= ODD_RATE_FACTOR && ratio >= 1 / ODD_RATE_FACTOR) continue;
+    const near = (x: number, target: number) => Math.abs(x / target - 1) < 0.2;
+    const why =
+      near(ratio, 1000) || near(ratio, 1 / 1000)
+        ? `looks like a rate for the wrong unit (${ratio > 1 ? '1000×' : '1/1000 of'} the SoR rate, as per km against per metre)`
+        : near(ratio, 100) || near(ratio, 1 / 100) || near(ratio, 10) || near(ratio, 1 / 10)
+          ? `is ${ratio > 1 ? `${Math.round(ratio)}×` : `1/${Math.round(1 / ratio)} of`} the SoR rate: a misplaced decimal point or zero?`
+          : ratio > 1
+            ? `is ${ratio.toFixed(1)}× the SoR rate`
+            : `is ${Math.round(ratio * 100)}% of the SoR rate`;
+    out.push({ line, match, ratio, why });
+  }
+  return out;
+}
+
+/**
+ * How a catalog item's rating differs from the BOQ line's: voltage class and the sizes that tell one
+ * item from the next (MVA, amperes, sq mm, cores…). Empty when nothing differs. Shown next to the
+ * suggestion, so a 66 kV item is never taken for a 110 kV line by mistake.
+ */
+export function ratingDifferences(line: Pick<EstimateLine, 'description'>, item: CatalogItem): string[] {
+  const out: string[] = [];
+  const itemText = `${item.item} ${item.context}`;
+  const lkv = highestKv(line.description);
+  const ikv = highestKv(itemText);
+  if (lkv !== null && ikv !== null && lkv !== ikv) out.push(`${ikv} kV, not ${lkv} kV`);
+  const sizes = (t: string) => {
+    const m = new Map<string, Set<string>>();
+    for (const tok of tokens(t)) {
+      const x = /^(\d+(?:\.\d+)?)([a-z]+)$/.exec(tok);
+      if (x && SIZE_UNITS.includes(x[2]!)) m.set(x[2]!, (m.get(x[2]!) ?? new Set()).add(x[1]!));
+    }
+    return m;
+  };
+  const NAMES: Record<string, string> = { mva: 'MVA', sqmm: 'sq mm', a: 'A', kn: 'kN', ah: 'Ah', core: 'core' };
+  const theirs = sizes(itemText);
+  for (const [unit, values] of sizes(line.description)) {
+    const t = theirs.get(unit);
+    if (t && ![...values].some((v) => t.has(v))) out.push(`${[...t].join('/')} ${NAMES[unit] ?? unit}, not ${[...values].join('/')} ${NAMES[unit] ?? unit}`);
+  }
+  return out;
 }

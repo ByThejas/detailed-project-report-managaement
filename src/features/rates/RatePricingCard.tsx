@@ -6,7 +6,8 @@ import { useToast } from '@/lib/toast';
 import { isMultiRate, type Estimate, type EstimateLine, type EstimateSection } from '@/features/preparation/types';
 import { sectionLabel } from '@/features/boq-import/toEstimateLine';
 import { loadRateCatalog } from './catalog';
-import { applySuggestion, buildIndex, exactCodeMatch, isReliable, suggestRates, rateRefOf, suggestionFor, type RateIndex, type RateSuggestion } from './match';
+import { forgetChoices, recalledChoices, rememberChoices, rememberedCount } from './memory';
+import { applySuggestion, buildIndex, exactCodeMatch, isReliable, oddRates, ratingDifferences, suggestRates, isSetBasis, nosInSet, rateRefOf, suggestionFor, tonnesPerNo, unitBasis, type LabourBasis, type OddRate, type RateIndex, type RateSuggestion } from './match';
 
 const rs = (n: number) => formatNumber(Math.round(n * 100) / 100);
 const PRICEABLE: EstimateSection[] = ['electrical', 'civil', 'line', 'lineCivil'];
@@ -45,6 +46,11 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
   const [section, setSection] = useState<EstimateSection | 'all'>('all');
   const [onlyMissing, setOnlyMissing] = useState(true);
   const [choices, setChoices] = useState<Record<string, Choice>>({});
+  const [onlyOdd, setOnlyOdd] = useState(false);
+  /** Per line: how SoR labour per Set, per tonne or per tonne-metre turns into a rate per No. */
+  const [bases, setBases] = useState<Record<string, LabourBasis>>({});
+  // Bumped when remembered choices change, so the suggestions are worked out again.
+  const [memoryVersion, setMemoryVersion] = useState(0);
 
   useEffect(() => {
     if (!open || index) return;
@@ -58,35 +64,58 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
   }, [open, index]);
 
   const sections = PRICEABLE.filter((s) => estimate.lines.some((l) => l.section === s));
-  const lines = estimate.lines.filter((l) => PRICEABLE.includes(l.section) && (section === 'all' || l.section === section) && l.description.trim() && (!onlyMissing || !hasRate(l)));
+  // Rates already in the estimate that sit far from the SoR item the line surely is.
+  const odd = useMemo(() => (index ? oddRates(index, estimate.lines.filter((l) => PRICEABLE.includes(l.section))) : []), [index, estimate.lines]);
+  const oddById = new Map<string, OddRate>(odd.map((o) => [o.line.id, o]));
+  const lines = estimate.lines.filter(
+    (l) => PRICEABLE.includes(l.section) && (section === 'all' || l.section === section) && l.description.trim() && (onlyOdd ? oddById.has(l.id) : !onlyMissing || !hasRate(l)),
+  );
   const multiCols = section === 'all' ? lines.some((l) => isMultiRate(l.section)) : isMultiRate(section);
   const suggestions = useMemo(() => {
     const out = new Map<string, RateSuggestion[]>();
-    if (index)
+    if (index) {
+      const recalled = recalledChoices(index, lines);
       for (const l of lines) {
-        const exact = exactCodeMatch(index, l);
-        const rest = suggestRates(index, l, 3).filter((x) => x.item.id !== exact?.item.id);
-        out.set(l.id, exact ? [exact, ...rest.slice(0, 2)] : rest);
+        // The line's own SR code first, then the item chosen before for this wording, then matches by wording.
+        const first = exactCodeMatch(index, l) ?? recalled.get(l.id) ?? null;
+        const rest = suggestRates(index, l, 3).filter((x) => x.item.id !== first?.item.id);
+        out.set(l.id, first ? [first, ...rest.slice(0, 2)] : rest);
       }
+    }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, section, onlyMissing, estimate.lines]);
+  }, [index, section, onlyMissing, onlyOdd, estimate.lines, memoryVersion]);
 
   // Only a line that names its SoR code, with that exact item found, starts ticked.
   const isExact = (id: string) => Boolean(suggestions.get(id)?.[0]?.exact);
   const choiceOf = (id: string): Choice => choices[id] ?? { pick: 0, code: '', apply: isExact(id) };
   const exactCount = lines.filter((l) => isExact(l.id)).length;
-  const reliableIds = lines.filter((l) => !hasRate(l) && !isExact(l.id) && suggestions.get(l.id)?.[0] && isReliable(l, suggestions.get(l.id)![0]!)).map((l) => l.id);
+  const isRemembered = (id: string) => Boolean(suggestions.get(id)?.[0]?.remembered);
+  const rememberedIds = lines.filter((l) => !hasRate(l) && isRemembered(l.id)).map((l) => l.id);
+  const reliableIds = lines.filter((l) => !hasRate(l) && !isExact(l.id) && !isRemembered(l.id) && suggestions.get(l.id)?.[0] && isReliable(l, suggestions.get(l.id)![0]!)).map((l) => l.id);
   const setChoice = (id: string, patch: Partial<Choice>) => setChoices((c) => ({ ...c, [id]: { ...choiceOf(id), ...patch } }));
+  const basisOf = (l: EstimateLine): LabourBasis => ({ tonnes: tonnesPerNo(l), ...bases[l.id] });
+  const setBasis = (id: string, patch: Partial<LabourBasis>) => setBases((b) => ({ ...b, [id]: { ...b[id], ...patch } }));
   const chosen = (l: EstimateLine): RateSuggestion | null => {
     const c = choiceOf(l.id);
-    if (c.pick === -1) return index ? byCode(index, l, c.code) : null;
-    return suggestions.get(l.id)?.[c.pick] ?? null;
+    const raw = c.pick === -1 ? (index ? byCode(index, l, c.code) : null) : (suggestions.get(l.id)?.[c.pick] ?? null);
+    if (!raw) return null;
+    // Re-priced with the line's basis, so labour per Set or per tonne becomes a rate per No.
+    return { ...raw, ...suggestionFor(raw.item, { ...l, basis: basisOf(l) }, raw.score, raw.shared) };
+  };
+  /** Which bases the chosen item's labour and T&C need, for a line counted in Nos. */
+  const basisNeeds = (l: EstimateLine, s: RateSuggestion) => {
+    if (!isMultiRate(l.section) || unitBasis(l.unit) !== 'no') return { set: false, setNosStated: undefined as number | undefined, weight: false, distance: false };
+    const kinds = [...s.item.labour, ...s.item.tc].map((c) => unitBasis(c.unit));
+    const setUnit = [s.item.unit, ...s.item.labour.map((c) => c.unit), ...s.item.tc.map((c) => c.unit)].find((u) => isSetBasis(unitBasis(u)));
+    return { set: Boolean(setUnit), setNosStated: setUnit ? nosInSet(setUnit) : undefined, weight: kinds.includes('weight') || kinds.includes('weightDistance'), distance: kinds.includes('weightDistance') };
   };
   const ticked = lines.filter((l) => choiceOf(l.id).apply && chosen(l));
 
   const apply = () => {
     const byId = new Map(ticked.map((l) => [l.id, chosen(l)!]));
+    rememberChoices(ticked.map((l) => ({ line: l, suggestion: byId.get(l.id)! })));
+    setMemoryVersion((v) => v + 1);
     let keptCount = 0;
     onChange({
       ...estimate,
@@ -139,6 +168,25 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
             </label>
             <span className="text-xs text-gray-500">Or type an SoR code in a row (e.g. 1.10) to take that exact item.</span>
           </div>
+          {odd.length > 0 && (
+            <div role="status" aria-label="Rates far from the SoR" className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900">
+              <p className="flex items-start gap-1.5 font-medium">
+                <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                {odd.length} {odd.length === 1 ? 'rate in the estimate looks' : 'rates in the estimate look'} wrong: taken from an SoR item of another rating, or more than 1.5× away from the SoR item the line names or closely matches.
+                <button type="button" className="btn-ghost -my-1 ml-auto h-7 text-xs" onClick={() => setOnlyOdd((v) => !v)}>
+                  {onlyOdd ? 'Show all items' : 'Show only these'}
+                </button>
+              </p>
+              <ul className="mt-1 space-y-0.5 pl-5">
+                {odd.slice(0, 8).map((o) => (
+                  <li key={o.line.id}>
+                    {o.line.code || o.line.description.slice(0, 40)}: Rs {rs(o.line.supplyRate)} per {o.line.unit}, SoR {o.match.item.code} is Rs {rs(o.match.supplyRate)}. It {o.why}.
+                  </li>
+                ))}
+                {odd.length > 8 && <li>…and {odd.length - 8} more.</li>}
+              </ul>
+            </div>
+          )}
           {failed ? (
             <p role="status" className="px-4 py-3 text-rose-700">
               The rate catalog could not be loaded.
@@ -193,6 +241,7 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
                             {l.qty} {l.unit}
                             {hasRate(l) && ` · now ${rs(l.supplyRate)}${isMultiRate(l.section) ? ` / ${rs(l.erectionRate)} / ${rs(l.testingRate)}` : ''}`}
                           </p>
+                          {oddById.has(l.id) && <p className="text-xs text-amber-700">Rate in the estimate {oddById.get(l.id)!.why}.</p>}
                         </td>
                         <td className="max-w-[24rem] py-2 pr-3">
                           <select
@@ -203,7 +252,7 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
                           >
                             {sugg.map((x, i) => (
                               <option key={x.item.id} value={i}>
-                                {x.exact ? 'Exact SoR code' : `${Math.round(x.score * 100)}%`} · {x.item.code} · {x.item.item.slice(0, 80)}
+                                {x.exact ? 'Exact SoR code' : x.remembered ? 'Your earlier choice' : `${Math.round(x.score * 100)}%`} · {x.item.code} · {x.item.item.slice(0, 80)}
                               </option>
                             ))}
                             <option value={-1}>SoR code typed by hand…</option>
@@ -219,13 +268,75 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
                           ) : (
                             c.pick === -1 && c.code && <p className="mt-1 text-xs text-rose-700">No item with that code.</p>
                           )}
-                          {s && !s.unitMatches && <p className="text-xs text-amber-700">Unit differs: catalog {s.item.unit}, BOQ {l.unit}.</p>}
+                          {s && ratingDifferences(l, s.item).length > 0 && (
+                            <p className="text-xs font-medium text-rose-700">Not the same rating: {ratingDifferences(l, s.item).join('; ')}. Check before ticking.</p>
+                          )}
+                          {sugg.length > 0 && sugg.every((x) => ratingDifferences(l, x.item).length > 0) && (
+                            <p className="text-xs text-rose-700">None of these has the BOQ’s rating: the SoR may not list this item. Enter the rate from the approved source, or type the right SoR code.</p>
+                          )}
+                          {s && !s.unitMatches && <p className="text-xs text-amber-700">Unit differs: catalog {s.item.unit}, BOQ {l.unit}.{basisNeeds(l, s).set && ' Choose what one Set is below.'}</p>}
+                          {s && (() => {
+                            const need = basisNeeds(l, s);
+                            if (!need.set && !need.weight) return null;
+                            const b = basisOf(l);
+                            const label = l.code || l.description.slice(0, 30);
+                            return (
+                              <div className="mt-1 flex flex-wrap items-center gap-2 text-xs text-gray-700">
+                                {need.set && (
+                                  <label className="flex items-center gap-1">
+                                    SoR rate per Set:
+                                    <select
+                                      aria-label={`Nos in one Set for ${label}`}
+                                      className="input h-7 w-auto text-xs"
+                                      value={b.setNos ?? ''}
+                                      onChange={(ev) => setBasis(l.id, { setNos: ev.target.value ? Number(ev.target.value) : undefined })}
+                                    >
+                                      <option value="">Not added</option>
+                                      {[...new Set([need.setNosStated ?? 3, 1, 3])].sort((a, z) => a - z).map((n) => (
+                                        <option key={n} value={n}>
+                                          1 Set = {n} {n === 1 ? 'No' : 'Nos'}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </label>
+                                )}
+                                {need.weight && (
+                                  <label className="flex items-center gap-1">
+                                    Weight per No (t):
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step="any"
+                                      aria-label={`Weight per No in tonnes for ${label}`}
+                                      className="input h-7 w-20 text-xs"
+                                      value={b.tonnes ?? ''}
+                                      onChange={(ev) => setBasis(l.id, { tonnes: ev.target.value === '' ? undefined : Number(ev.target.value) })}
+                                    />
+                                  </label>
+                                )}
+                                {need.distance && (
+                                  <label className="flex items-center gap-1">
+                                    Moving distance (m):
+                                    <input
+                                      type="number"
+                                      min={0}
+                                      step="any"
+                                      aria-label={`Moving distance in metres for ${label}`}
+                                      className="input h-7 w-20 text-xs"
+                                      value={b.metres ?? ''}
+                                      onChange={(ev) => setBasis(l.id, { metres: ev.target.value === '' ? undefined : Number(ev.target.value) })}
+                                    />
+                                  </label>
+                                )}
+                              </div>
+                            );
+                          })()}
                           {s && s.notApplied.length > 0 && (
                             <p className="text-xs text-amber-700">
-                              Not added (needs another basis): {s.notApplied.map((n) => `${n.rate} per ${n.unit}`).join(', ')}
+                              Not added (needs a basis above): {s.notApplied.map((n) => `${n.rate} per ${n.unit}`).join(', ')}
                             </p>
                           )}
-                          {s && s.converted.length > 0 && <p className="text-xs text-gray-600">Per tonne, from the line’s tonnage: {s.converted.join('; ')}.</p>}
+                          {s && s.converted.length > 0 && <p className="text-xs text-gray-600">Converted to the line’s unit: {s.converted.join('; ')}.</p>}
                           {s && isMultiRate(l.section) && s.erectionRate === 0 && l.erectionRate > 0 && (
                             <p className="text-xs text-gray-600">No erection rate in this unit in the catalog: the line keeps its own ({rs(l.erectionRate)}).</p>
                           )}
@@ -263,6 +374,24 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
                   onClick={() => setChoices((c) => Object.fromEntries([...Object.entries(c), ...lines.filter((l) => isExact(l.id)).map((l) => [l.id, { pick: 0, code: '', apply: true }])]))}
                 >
                   Tick all exact-code matches
+                </button>
+              )}
+              {rememberedIds.length > 0 && (
+                <button type="button" className="btn-ghost h-8 text-xs" onClick={() => setChoices((c) => Object.fromEntries([...Object.entries(c), ...rememberedIds.map((id) => [id, { pick: 0, code: '', apply: true }])]))}>
+                  Tick {rememberedIds.length} earlier {rememberedIds.length === 1 ? 'choice' : 'choices'}
+                </button>
+              )}
+              {rememberedCount() > 0 && (
+                <button
+                  type="button"
+                  className="btn-ghost h-8 text-xs text-gray-500"
+                  title="Items you applied before are offered first for the same wording. This forgets them in this browser."
+                  onClick={() => {
+                    forgetChoices();
+                    setMemoryVersion((v) => v + 1);
+                  }}
+                >
+                  Forget earlier choices
                 </button>
               )}
               {reliableIds.length > 0 && (

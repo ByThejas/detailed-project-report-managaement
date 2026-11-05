@@ -39,6 +39,8 @@ export interface EstimateLine {
   source?: string;
   /** Schedule-of-rates item the rates were taken from, e.g. "SoR 2023-24 · By code 1.10 · p25". */
   rateRef?: string;
+  /** SoR labour or T&C rates left out when pricing, because their unit needs a basis (per Set, per tonne…). */
+  labourNotAdded?: string;
   /** SoR item code the BOQ itself names (an "SR Code" column), used to take that exact catalog item. */
   srCode?: string;
   /** Headings the line sits under in the BOQ ("Fabrication and supply of towers"), used only to match it to the rate catalog. */

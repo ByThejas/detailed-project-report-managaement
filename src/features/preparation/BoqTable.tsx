@@ -43,6 +43,7 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
         const next = { ...l, ...change, ...(l.source === TEMPLATE_SOURCE ? { source: `${TEMPLATE_SOURCE}, edited` } : {}) };
         // A rate typed by hand is no longer the schedule-of-rates item's.
         if ('supplyRate' in change || 'erectionRate' in change || 'testingRate' in change) delete next.rateRef;
+        if ('erectionRate' in change || 'testingRate' in change) delete next.labourNotAdded;
         return next;
       }),
     });
@@ -120,6 +121,11 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
                     />
                     {l.source && <p className="text-xs text-gray-400">From {l.source}</p>}
                     {l.rateRef && <p className="text-xs text-emerald-700">Rates: {l.rateRef}</p>}
+                    {l.labourNotAdded && (
+                      <p className="text-xs text-amber-700">
+                        SoR erection/T&amp;C not added, as it is not per {l.unit || 'unit'}: {l.labourNotAdded}. Type the rate per {l.unit || 'unit'}, or set the basis in “Price from the rate catalog”.
+                      </p>
+                    )}
                     {noRate && <p className="text-xs text-amber-700">Rate needed</p>}
                     {electrical && l.qty > 0 && l.supplyRate === 0 && (l.erectionRate > 0 || l.testingRate > 0) && <p className="text-xs text-gray-400">Labour only: no supply rate</p>}
                   </td>

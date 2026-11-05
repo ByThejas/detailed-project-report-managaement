@@ -1,6 +1,6 @@
 import catalog from '@/data/rateCatalog.json';
 import { newLine } from '@/features/preparation/template';
-import { applySuggestion, buildIndex, exactCodeMatch, highestKv, isLabourOnly, isReliable, rateRefOf, suggestRates, suggestionFor, tokens, unitBasis, unitFactor, unitKind } from './match';
+import { applySuggestion, buildIndex, exactCodeMatch, highestKv, isLabourOnly, isReliable, itemOfRateRef, oddRates, ratingDifferences, rateRefOf, suggestRates, suggestionFor, tokens, tonnesPerNo, unitBasis, unitFactor, unitKind } from './match';
 import type { RateCatalog } from './types';
 
 const index = buildIndex(catalog as RateCatalog);
@@ -101,6 +101,45 @@ describe('units and kept rates', () => {
     expect(suggestionFor(item('No', [{ unit: 't', rate: 5723 }]), { unit: 'No', qty: 1, section: 'line' }).notApplied).toHaveLength(1);
   });
 
+  it('turns SoR labour per Set into a rate per No once the estimator says what a Set is', () => {
+    const it3 = item('Set (3 Nos.)', [{ unit: 'Set (3 Nos.)', rate: 300 }]);
+    // Not guessed: a BOQ "No" is one unit for some items and a set of three for others.
+    expect(suggestionFor(it3, { unit: 'No', section: 'electrical' }).notApplied).toHaveLength(1);
+    const s3 = suggestionFor(it3, { unit: 'No', section: 'electrical', basis: { setNos: 3 } });
+    expect(s3).toMatchObject({ supplyRate: 1000 / 3, erectionRate: 100, notApplied: [], unitMatches: true });
+    const perSet = item('Set', [{ unit: 'Set', rate: 9000 }], [{ unit: 'Set', rate: 600 }]);
+    expect(suggestionFor(perSet, { unit: 'No', section: 'electrical', basis: { setNos: 1 } })).toMatchObject({ supplyRate: 1000, erectionRate: 9000, testingRate: 600 });
+    expect(suggestionFor(perSet, { unit: 'No', section: 'electrical', basis: { setNos: 3 } })).toMatchObject({ erectionRate: 3000, testingRate: 200 });
+  });
+
+  it('prices transformer haulage per tonne-metre and erection per tonne from the weight the estimator gives', () => {
+    // SoR 1.10: erection Rs 80 per t/m of moving and Rs 1,134 per t.
+    const tx = item('No', [{ unit: 't/m', rate: 80 }, { unit: 't', rate: 1134 }]);
+    const none = suggestionFor(tx, { unit: 'No', qty: 2, section: 'electrical' });
+    expect(none.erectionRate).toBe(0);
+    expect(none.notApplied).toHaveLength(2);
+    const onlyWeight = suggestionFor(tx, { unit: 'No', qty: 2, section: 'electrical', basis: { tonnes: 40 } });
+    expect(onlyWeight.erectionRate).toBe(1134 * 40);
+    expect(onlyWeight.notApplied).toHaveLength(1);
+    const both = suggestionFor(tx, { unit: 'No', qty: 2, section: 'electrical', basis: { tonnes: 40, metres: 50 } });
+    expect(both.erectionRate).toBe(80 * 40 * 50 + 1134 * 40);
+    expect(both.notApplied).toEqual([]);
+  });
+
+  it('reads the weight of one No from the BOQ', () => {
+    expect(tonnesPerNo({ description: 'Tower type DA (2.45 t per structure)', unit: 'No', qty: 4 })).toBe(2.45);
+    expect(tonnesPerNo({ description: 'Structures', unit: 'No (6 MT)', qty: 4 })).toBe(1.5);
+    expect(tonnesPerNo({ description: 'Isolator', unit: 'No', qty: 4 })).toBeUndefined();
+  });
+
+  it('records on the line the SoR labour that was not added, so the BOQ can show it', () => {
+    const line = { ...newLine('electrical', 'A1'), unit: 'No', qty: 2 };
+    const tx = item('No', [{ unit: 't/m', rate: 80 }]);
+    expect(applySuggestion(line, suggestionFor(tx, line)).line.labourNotAdded).toBe('Rs 80 per t/m');
+    const priced = { ...line, basis: { tonnes: 40, metres: 50 } };
+    expect(applySuggestion(line, suggestionFor(tx, priced)).line).toMatchObject({ erectionRate: 160_000, labourNotAdded: undefined });
+  });
+
   it('never wipes out a line’s own erection or T&C rate when the catalog has none in its unit', () => {
     const line = { ...newLine('electrical', 'A1'), unit: 'No', qty: 1, supplyRate: 1, erectionRate: 120_000, testingRate: 70_000 };
     const s = suggestionFor(item('No', [{ unit: 't/m', rate: 80 }], [{ unit: 'No', rate: 14_180 }]), line);
@@ -168,5 +207,57 @@ describe('wording that changes the item (tested on 21 KPTCL estimate workbooks)'
     const line = { description: 'Mid Span Compression Joint', unit: 'Nos', section: 'line' as const, group: 'Accessories for Coyote ACSR' };
     const moose = suggestRates(index, { ...line, group: '' }, 5).find((x) => /Moose/.test(x.item.item))!;
     expect(isReliable(line, moose)).toBe(false);
+  });
+
+  it('keeps CT ratio, arrester class and the indoor/outdoor version apart', () => {
+    expect(tokens('66kV CT of ratio 200-100/ l-l-lA')).toContain('ratio200x100');
+    const ct = suggestRates(index, { description: '66kV Class, 40KA, CT of ratio 200-100/ l-l-lA with suitable terminal connector', unit: 'No.', section: 'electrical' }, 1);
+    expect(ct[0]!.item.code).toBe('5.2.13');
+    const la = suggestRates(index, { description: '60 kV, 10 kA, class - II', unit: 'No.', section: 'electrical' }, 1);
+    expect(la[0]!.item.code).toBe('8.6');
+    const out = suggestRates(index, { description: '11KV Current Transformer of ratio 1200-800/1-1-1 A for 11kV Bank Incomer (Outdoor)', unit: 'Nos.', section: 'electrical' }, 1);
+    expect(out[0]!.item.code).toBe('5.3.4');
+  });
+});
+
+describe('rates far from the SoR', () => {
+  const pt = (supplyRate: number, unit = 'No') => ({ ...newLine('electrical', 'A1'), description: 'Power transformer 12.5 MVA, 66/11 kV', unit, qty: 1, supplyRate, srCode: '1.11' });
+
+  it('flags a rate far from the item the line names, and says why', () => {
+    const soR = exactCodeMatch(index, pt(1))!.supplyRate;
+    expect(oddRates(index, [pt(soR), pt(soR * 1.3)])).toEqual([]);
+    const [far] = oddRates(index, [pt(soR * 3)]);
+    expect(far!.why).toBe('is 3.0× the SoR rate');
+    expect(oddRates(index, [pt(soR / 10)])[0]!.why).toMatch(/misplaced decimal point/);
+    expect(oddRates(index, [pt(soR * 1000)])[0]!.why).toMatch(/wrong unit/);
+  });
+
+  it('leaves alone a rate whose match is only a loose one', () => {
+    const loose = { ...newLine('electrical', 'A2'), description: 'For Tr HV side', unit: 'No', qty: 1, supplyRate: 1 };
+    expect(oddRates(index, [loose])).toEqual([]);
+  });
+});
+
+describe('an SoR item of another rating (Harappanahalli, 8 MVA 110/11 kV)', () => {
+  const pt8 = { ...newLine('electrical', 'A1 a'), description: 'Power transformer 8 MVA, 110/11 kV, Dyn11, OLTC, ONAN/ONAF, with RTCC panel, first oil filling and 10% spare oil', unit: 'Nos', qty: 1 };
+
+  it('reads "110/33-11 kV" as 110 kV', () => {
+    expect(highestKv('POWER TRANSFORMER 10 MVA, 110/33-11 kV Transformer')).toBe(110);
+    expect(highestKv('66/11kV')).toBe(66);
+  });
+
+  it('says how each suggestion differs, since the SoR has no 8 MVA 110/11 kV transformer', () => {
+    const s = suggestRates(index, pt8, 3);
+    expect(s.every((x) => ratingDifferences(pt8, x.item).length > 0)).toBe(true);
+    expect(ratingDifferences(pt8, byCode('1.13'))).toEqual(['66 kV, not 110 kV']);
+    expect(ratingDifferences(pt8, byCode('1.12'))).toEqual(['10 MVA, not 8 MVA']);
+    expect(s.some((x) => isReliable(pt8, x))).toBe(false);
+  });
+
+  it('flags a line already priced from the 66 kV item', () => {
+    const priced = { ...pt8, supplyRate: 10_180_940, rateRef: rateRefOf(suggestionFor(byCode('1.13'), pt8)) };
+    expect(itemOfRateRef(index, priced.rateRef)!.code).toBe('1.13');
+    const [o] = oddRates(index, [priced]);
+    expect(o!.why).toBe('was priced from SoR 1.13, which is 66 kV, not 110 kV');
   });
 });
