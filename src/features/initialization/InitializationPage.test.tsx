@@ -57,6 +57,21 @@ describe('DPR Initialization', () => {
     expect(screen.getByTestId('final-approver')).toHaveTextContent('To be confirmed');
   });
 
+  it('creates a line work DPR without a transformer capacity', async () => {
+    renderAt('/initialization');
+    await userEvent.type(await screen.findByLabelText(/Project name/), '110 kV DC line Channapatna to Ramanagara');
+    await userEvent.selectOptions(screen.getByLabelText(/Work type/), 'Line work');
+    expect(screen.getByText(/Optional for line work/)).toBeInTheDocument();
+    await userEvent.type(screen.getByLabelText(/Location/), 'Channapatna');
+    await pickFromCombobox(/Zone/, 'bang', 'BANGALORE');
+    await pickFromCombobox(/Circle/, 'bmaz n', 'BMAZ NORTH');
+    await pickFromCombobox(/Division/, 'peen', 'PEENYA');
+    await userEvent.click(screen.getByRole('button', { name: 'Initialize DPR' }));
+    expect(await screen.findByRole('region', { name: 'DPR initialized' })).toBeInTheDocument();
+    const saved = JSON.parse(localStorage.getItem('dpr-manager.sample-dprs.v1')!)[0];
+    expect(saved).toMatchObject({ workType: 'Line work', capacity: '' });
+  });
+
   it('creates a DPR when the form is valid', async () => {
     renderAt('/initialization');
     await userEvent.type(await screen.findByLabelText(/Project name/), '110/11kV Channapatna New S/S');

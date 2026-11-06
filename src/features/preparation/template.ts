@@ -74,7 +74,7 @@ function dismantlingLines(n: number, lv: string): EstimateLine[] {
   return out;
 }
 
-export function buildTemplate(dpr: { capacity: string; voltage: string; stream?: string }): Estimate {
+export function buildTemplate(dpr: { capacity: string; voltage: string; stream?: string; workType?: string }): Estimate {
   const { units: n, mva } = parseCapacity(dpr.capacity);
   const hv = dpr.voltage.replace(/\s*kV/i, '');
   const lv = LV_BY_HV[hv] ?? '11';
@@ -106,11 +106,13 @@ export function buildTemplate(dpr: { capacity: string; voltage: string; stream?:
   ];
 
   // A greenfield (new) substation has no sample item list yet, so its BOQ comes only from the imported workbooks.
+  // Line work has no transformer, so the substation sample doesn't apply either.
   const greenfield = dpr.stream === 'Greenfield';
-  if (!greenfield) lines.push(...dismantlingLines(n, lv));
+  const empty = greenfield || dpr.workType === 'Line work';
+  if (!empty) lines.push(...dismantlingLines(n, lv));
 
   return {
-    lines: greenfield ? [] : lines.map((l) => ({ ...l, source: TEMPLATE_SOURCE })),
+    lines: empty ? [] : lines.map((l) => ({ ...l, source: TEMPLATE_SOURCE })),
     misc: { supply: 0, erection: 0, testing: 0, civil: 0, dismantling: 0 },
     areaLoadingPct: 5,
     gstPct: 18,

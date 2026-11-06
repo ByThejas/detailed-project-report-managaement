@@ -12,11 +12,12 @@ import { useCircles, useDivisions, useStations, useZones } from '@/features/loca
 import { useCreateDpr } from './api';
 import { approvalRouteFor } from './routing';
 import { newDprSchema, type NewDprForm } from './schema';
-import { CAPACITY_MVA, CAPACITY_UNITS, formatCapacity, PROJECT_TYPES, VOLTAGE_CLASSES, type CreatedDpr } from './types';
+import { CAPACITY_MVA, CAPACITY_UNITS, formatCapacity, PROJECT_TYPES, VOLTAGE_CLASSES, WORK_TYPES, type CreatedDpr } from './types';
 
 const DEFAULTS: NewDprForm = {
   projectName: '',
   projectType: 'Greenfield',
+  workType: 'Station work',
   voltageClass: '66 kV',
   capacityUnits: '' as NewDprForm['capacityUnits'],
   capacityMva: '' as NewDprForm['capacityMva'],
@@ -92,6 +93,7 @@ export function InitializationPage() {
   const circleId = watch('circleId');
   const divisionId = watch('divisionId');
   const voltageClass = watch('voltageClass');
+  const lineWork = watch('workType') === 'Line work';
   const route = approvalRouteFor(voltageClass);
 
   const zones = useZones();
@@ -103,7 +105,8 @@ export function InitializationPage() {
   const onSubmit = handleSubmit(async (values) => {
     try {
       const { capacityUnits, capacityMva, ...rest } = values;
-      const dpr = await create.mutateAsync({ ...rest, capacity: formatCapacity(capacityUnits, capacityMva) });
+      const capacity = capacityUnits && capacityMva ? formatCapacity(capacityUnits, capacityMva) : '';
+      const dpr = await create.mutateAsync({ ...rest, capacity });
       setCreated(dpr);
       toast({ title: 'DPR initialized', description: dpr.id });
     } catch {
@@ -140,6 +143,9 @@ export function InitializationPage() {
                   <TextInput id="projectName" placeholder="110/11kV Channapatna New S/S" invalid={!!errors.projectName} {...register('projectName')} />
                 </Field>
                 <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <Field id="workType" label="Work type" required hint={lineWork ? 'A transmission line, its towers and terminal bays.' : 'Works at a substation.'}>
+                    <Select id="workType" options={WORK_TYPES} aria-describedby="workType-hint" {...register('workType')} />
+                  </Field>
                   <Field id="projectType" label="Project type" required>
                     <Select id="projectType" options={PROJECT_TYPES} {...register('projectType')} />
                   </Field>
@@ -147,7 +153,13 @@ export function InitializationPage() {
                     <Select id="voltageClass" options={VOLTAGE_CLASSES} {...register('voltageClass')} />
                   </Field>
                   <div className="sm:col-span-2 sm:max-w-sm">
-                  <Field id="capacityUnits" label="Capacity" required error={err('capacityUnits') ?? err('capacityMva')}>
+                  <Field
+                    id="capacityUnits"
+                    label="Capacity"
+                    required={!lineWork}
+                    error={err('capacityUnits') ?? err('capacityMva')}
+                    hint={lineWork ? 'Optional for line work. Fill it in only if the DPR also adds transformers.' : undefined}
+                  >
                     <div className="flex items-center gap-2">
                       <Select
                         id="capacityUnits"

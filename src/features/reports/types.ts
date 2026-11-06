@@ -15,6 +15,8 @@ export interface DprRow {
   project: string;
   location: string;
   stream: Stream;
+  /** Station work or line work. Older DPRs have none and count as station work. */
+  workType?: 'Station work' | 'Line work';
   voltage: string;
   capacity: string;
   zone: string;

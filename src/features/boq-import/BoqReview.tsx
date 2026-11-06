@@ -8,6 +8,8 @@ import { planImport, sectionLabel, sectionOfItem, type ImportMode, type ImportPl
 import type { BoqReadResult, ParsedItem } from './types';
 
 const amount = (n: number) => formatNumber(Math.round(n * 100) / 100);
+/** Quantity × rate, the way the estimate works it out; blank until both are known. */
+const times = (qty: number | null, rate: number | null | undefined) => (qty != null && Number.isFinite(qty) && rate ? qty * rate : null);
 
 export type { ImportMode };
 
@@ -17,15 +19,19 @@ interface BoqReviewProps {
   currentLines: EstimateLine[];
   onCancel: () => void;
   onImport: (plan: ImportPlan, mode: ImportMode) => void;
-  /** Offer one button that confirms every warning at once (the BOQ test bench only; a real DPR confirms row by row). */
-  allowConfirmAll?: boolean;
 }
 
 /**
  * Shows every item read from a BOQ workbook next to its source row. Nothing reaches the estimate
  * until every included row is either clean, fixed, or explicitly confirmed.
  */
-export function BoqReview({ read, currentLines, onCancel, onImport, allowConfirmAll = false }: BoqReviewProps) {
+const sumOf = (items: ParsedItem[], rate: 'supplyRate' | 'erectionRate' | 'testingRate') => items.reduce((t, i) => t + (times(i.qty, i[rate]) ?? 0), 0);
+
+function AmountCell({ value }: { value: number | null }) {
+  return <td className="num px-2 py-2 text-right font-medium text-gray-900">{value == null ? '—' : amount(value)}</td>;
+}
+
+export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewProps) {
   const [items, setItems] = useState<ParsedItem[]>(read.items);
   const [excluded, setExcluded] = useState<Set<string>>(new Set());
   const [confirmed, setConfirmed] = useState<Set<string>>(new Set());
@@ -167,7 +173,7 @@ export function BoqReview({ read, currentLines, onCancel, onImport, allowConfirm
       </div>
 
       <div className="overflow-x-auto relative">
-        <table className={`w-full text-[13px] ${electrical ? 'min-w-[1120px]' : 'min-w-[880px]'}`}>
+        <table className={`w-full text-[13px] ${electrical ? 'min-w-[1480px]' : 'min-w-[1000px]'}`}>
           <thead>
             <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs text-gray-500">
               <th scope="col" className={`${th} w-28 pl-4`}>Source</th>
@@ -177,10 +183,13 @@ export function BoqReview({ read, currentLines, onCancel, onImport, allowConfirm
               <th scope="col" className={`${th} w-20`}>Unit</th>
               <th scope="col" className={`${th} w-24 text-right`}>Qty</th>
               <th scope="col" className={`${th} w-28 text-right`}>{electrical ? 'Supply rate' : 'Rate'}</th>
+              <th scope="col" className={`${th} w-32 text-right text-gray-700`}>{electrical ? 'Supply amount' : 'Amount'}</th>
               {electrical && (
                 <>
                   <th scope="col" className={`${th} w-24 text-right`}>Erection rate</th>
+                  <th scope="col" className={`${th} w-28 text-right text-gray-700`}>Erection amount</th>
                   <th scope="col" className={`${th} w-24 text-right`}>T&amp;C rate</th>
+                  <th scope="col" className={`${th} w-28 text-right text-gray-700`}>T&amp;C amount</th>
                 </>
               )}
               <th scope="col" className={`${th} w-64 pr-4`}>Check</th>
@@ -229,10 +238,13 @@ export function BoqReview({ read, currentLines, onCancel, onImport, allowConfirm
                     />
                   </td>
                   <td className="num px-2 py-2 text-right text-gray-700">{i.supplyRate ? amount(i.supplyRate) : '—'}</td>
+                  <AmountCell value={times(i.qty, i.supplyRate)} />
                   {electrical && (
                     <>
                       <td className="num px-2 py-2 text-right text-gray-700">{i.erectionRate ? amount(i.erectionRate) : '—'}</td>
+                      <AmountCell value={times(i.qty, i.erectionRate)} />
                       <td className="num px-2 py-2 text-right text-gray-700">{i.testingRate ? amount(i.testingRate) : '—'}</td>
+                      <AmountCell value={times(i.qty, i.testingRate)} />
                     </>
                   )}
                   <td className="px-2 py-2 pr-4 text-xs">
@@ -259,12 +271,31 @@ export function BoqReview({ read, currentLines, onCancel, onImport, allowConfirm
             })}
             {shown.length === 0 && (
               <tr>
-                <td colSpan={electrical ? 10 : 8} className="px-4 py-6 text-center text-gray-500">
+                <td colSpan={electrical ? 13 : 9} className="px-4 py-6 text-center text-gray-500">
                   {onlyAttention ? 'No rows need attention.' : 'No items in the selected sheets.'}
                 </td>
               </tr>
             )}
           </tbody>
+          {included.length > 0 && (
+            <tfoot className="border-t border-gray-200 bg-gray-50 text-[13px] font-semibold text-gray-900">
+              <tr>
+                <td colSpan={7} className="py-2 pl-4 pr-2 text-right">
+                  Total of the {included.length} rows to import
+                </td>
+                <td className="num px-2 py-2 text-right">{amount(sumOf(included, 'supplyRate'))}</td>
+                {electrical && (
+                  <>
+                    <td />
+                    <td className="num px-2 py-2 text-right">{amount(sumOf(included, 'erectionRate'))}</td>
+                    <td />
+                    <td className="num px-2 py-2 text-right">{amount(sumOf(included, 'testingRate'))}</td>
+                  </>
+                )}
+                <td />
+              </tr>
+            </tfoot>
+          )}
         </table>
       </div>
 
@@ -300,11 +331,6 @@ export function BoqReview({ read, currentLines, onCancel, onImport, allowConfirm
         {currentCount > 0 && (
           <button type="button" className="btn-secondary" disabled={blocking.length > 0 || lines.length === 0} onClick={() => onImport(plan, 'append')}>
             Add to the current items
-          </button>
-        )}
-        {allowConfirmAll && blocking.some((i) => openErrors(i).length === 0) && (
-          <button type="button" className="btn-secondary" onClick={() => setConfirmed((c) => new Set([...c, ...blocking.filter((i) => openErrors(i).length === 0).map((i) => i.id)]))}>
-            Confirm all warnings
           </button>
         )}
         <button type="button" className="btn-ghost" onClick={onCancel}>

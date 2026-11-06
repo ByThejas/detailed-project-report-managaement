@@ -34,7 +34,7 @@ describe('Dashboard', () => {
   it('shows only Dashboard, DPR Initialization, DPR Reports and Documents in the menu', async () => {
     renderAt('/dashboard');
     const nav = await screen.findByRole('navigation', { name: 'Main' });
-    expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(['Dashboard', 'DPR Initialization', 'DPR Reports', 'Documents', 'DPR Preparation', 'BOQ test bench (temp)']);
+    expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(['Dashboard', 'DPR Initialization', 'DPR Reports', 'Documents', 'DPR Preparation']);
   });
 
   it('hides the sidebar with the toggle and remembers it', async () => {

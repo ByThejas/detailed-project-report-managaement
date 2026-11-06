@@ -1,3 +1,5 @@
+import 'fake-indexeddb/auto';
+import { putFiles } from '@/lib/fileStore';
 import { cleanup, screen, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { renderAt } from '@/test/renderApp';
@@ -50,6 +52,22 @@ describe('DPR Preparation', () => {
     expect(within(inputs).getByText('kogali-sld.pdf')).toBeInTheDocument();
     expect(within(inputs).getByText('Not applicable')).toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'Estimate summary' })).getByText('2 / 9')).toBeInTheDocument();
+  });
+
+  it('previews an input document stored in this browser', async () => {
+    seed([KOGALI]);
+    sampleStore.saveDocuments(KOGALI.id, {
+      files: { 'single-line-diagram-sld': [{ name: 'kogali-sld.txt', size: 10, addedAt: '2026-10-31T09:00:00.000Z' }] },
+      notApplicable: [],
+    });
+    await putFiles(KOGALI.id, 'single-line-diagram-sld', [new File(['SLD notes: 2x20 MVA'], 'kogali-sld.txt', { type: 'text/plain' })]);
+    renderAt(url);
+    const inputs = await screen.findByRole('region', { name: 'Input documents' });
+    await userEvent.click(within(inputs).getByRole('button', { name: 'Preview kogali-sld.txt' }));
+    const dialog = await screen.findByRole('dialog', { name: 'Preview: kogali-sld.txt' });
+    expect(await within(dialog).findByText('SLD notes: 2x20 MVA')).toBeInTheDocument();
+    await userEvent.click(within(dialog).getByRole('button', { name: 'Close preview' }));
+    expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   });
 
   it('adds the dismantling estimate and Abstract-II for a brownfield DPR only', async () => {

@@ -29,6 +29,7 @@ async function createSample(req: NewDprRequest): Promise<CreatedDpr> {
     project: req.projectName.trim(),
     location: req.location.trim(),
     stream: req.projectType,
+    workType: req.workType,
     voltage: req.voltageClass,
     capacity: req.capacity.trim(),
     zone,

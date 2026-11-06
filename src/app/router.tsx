@@ -24,13 +24,12 @@ const pages = {
   reports: page(() => import('@/features/reports/ReportsPage'), (m) => m.ReportsPage),
   documents: page(() => import('@/features/documents/DocumentsPage'), (m) => m.DocumentsPage),
   preparation: page(() => import('@/features/preparation/DprPreparationPage'), (m) => m.DprPreparationPage),
-  boqTest: page(() => import('@/features/boq-finance/BoqFinancePage'), (m) => m.BoqFinancePage),
 };
 
 /** Loads every page's code now, e.g. before tests render synchronously. */
 export const preloadPages = () => Promise.all(Object.values(pages).map((p) => p.preload()));
 
-const { dashboard: Dashboard, initialization: Initialization, reports: Reports, documents: Documents, preparation: Preparation, boqTest: BoqTest } = pages;
+const { dashboard: Dashboard, initialization: Initialization, reports: Reports, documents: Documents, preparation: Preparation } = pages;
 
 export const routes = [
   {
@@ -42,7 +41,6 @@ export const routes = [
       { path: 'reports', element: <Reports /> },
       { path: 'documents', element: <Documents /> },
       { path: 'preparation', element: <Preparation /> },
-      { path: 'boq-test', element: <BoqTest /> },
       { path: '*', element: <NotFoundPage /> },
     ],
   },

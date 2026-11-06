@@ -1,6 +1,10 @@
 export const PROJECT_TYPES = ['Greenfield', 'Brownfield'] as const;
 export type ProjectType = (typeof PROJECT_TYPES)[number];
 
+/** Whether the DPR is for works at a substation or for a transmission line. */
+export const WORK_TYPES = ['Station work', 'Line work'] as const;
+export type WorkType = (typeof WORK_TYPES)[number];
+
 export const VOLTAGE_CLASSES = ['66 kV', '110 kV', '220 kV', '400 kV'] as const;
 export type VoltageClass = (typeof VOLTAGE_CLASSES)[number];
 
@@ -13,7 +17,9 @@ export const formatCapacity = (units: string, mva: string) => `${units}x${mva} M
 export interface NewDprRequest {
   projectName: string;
   projectType: ProjectType;
+  workType: WorkType;
   voltageClass: VoltageClass;
+  /** Transformer capacity, e.g. 2x20 MVA; may be empty for line work. */
   capacity: string;
   location: string;
   zoneId: string;

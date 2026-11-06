@@ -1,15 +1,19 @@
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import {
   ArrowRight,
   Calculator,
   Check,
   Download,
+  Eye,
+  FileSpreadsheet,
   FileStack,
   FileText,
   Plus,
   RotateCcw,
+  Trash2,
   TriangleAlert,
+  Upload,
 } from "lucide-react";
 import { Badge, type BadgeTone } from "@/components/ui/Badge";
 import { Card, CardHeader } from "@/components/ui/Card";
@@ -32,7 +36,8 @@ import {
 import type { DprRow } from "@/features/reports/types";
 import { formatNumber } from "@/lib/format";
 import { useToast } from "@/lib/toast";
-import { BOQ_DOCUMENTS, useBoqReads, useReadBoqFiles } from "@/features/boq-import/api";
+import { BOQ_DOCUMENTS, useBoqReads, useReadBoqFiles, useRemoveBoqRead } from "@/features/boq-import/api";
+import { FilePreview } from "@/features/documents/FilePreview";
 import { BoqReview } from "@/features/boq-import/BoqReview";
 import {
   applyImport,
@@ -41,7 +46,6 @@ import {
   type ImportPlan,
 } from "@/features/boq-import/toEstimateLine";
 import { openErrors, warningsOf } from "@/features/boq-import/parse";
-import { isReadableBoq } from "@/features/boq-import/readWorkbook";
 import type { BoqReadResult } from "@/features/boq-import/types";
 import { useEstimate, useSaveEstimate } from "./api";
 import { BoqTable } from "./BoqTable";
@@ -119,76 +123,43 @@ function SummaryStrip({ collected, e }: { collected: number; e: Estimate }) {
   );
 }
 
-export function BoqReadState({
-  files,
-  reads,
-  onReview,
-}: {
-  files: { name: string }[];
-  reads: BoqReadResult[];
-  onReview: (r: BoqReadResult) => void;
-}) {
-  if (!files.length) return null;
+/** How a read estimate workbook stands: failed, needing checks, or clean. */
+function readState(read: BoqReadResult) {
+  if (read.failure) return <span className="text-rose-700">{read.failure}</span>;
+  const attention = read.items.filter(
+    (i) => openErrors(i).length || warningsOf(i).length,
+  ).length;
   return (
-    <ul className="mt-1.5 w-full space-y-1 pl-9 text-xs">
-      {files.map((f) => {
-        const read = reads.find((r) => r.fileName === f.name);
-        let state;
-        if (!isReadableBoq(f.name))
-          state = (
-            <span className="text-gray-500">
-              Not read: quantities are read from Excel files (.xlsx, .xlsm, .xls) only
-            </span>
-          );
-        else if (!read)
-          state = (
-            <span className="text-gray-500">
-              Not read yet: attach the file again in Documents to read it
-            </span>
-          );
-        else if (read.failure)
-          state = <span className="text-rose-700">{read.failure}</span>;
-        else {
-          const attention = read.items.filter(
-            (i) => openErrors(i).length || warningsOf(i).length,
-          ).length;
-          state = (
-            <>
-              <span className="text-gray-600">
-                {read.items.length} items read
-                {attention ? `, ${attention} to check` : ", all clean"}
-              </span>
-              <button
-                type="button"
-                className="btn-secondary h-7 px-2 text-xs"
-                onClick={() => onReview(read)}
-              >
-                Review &amp; import
-              </button>
-            </>
-          );
-        }
-        return (
-          <li
-            key={f.name}
-            className="flex flex-wrap items-center gap-x-3 gap-y-1"
-          >
-            <span className="font-medium text-gray-700">{f.name}</span>
-            {state}
-          </li>
-        );
-      })}
-    </ul>
+    <span className="text-gray-600">
+      {read.items.length} items read
+      {attention ? `, ${attention} to check` : ", all clean"}
+    </span>
   );
 }
 
-function InputsCard({ dprId, docs }: { dprId: string; docs: DprDocuments }) {
+const readDate = (iso: string) => {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime())
+    ? ""
+    : d.toLocaleString("en-IN", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" });
+};
+
+function InputsCard({
+  dprId,
+  docs,
+  onUploadEstimate,
+}: {
+  dprId: string;
+  docs: DprDocuments;
+  onUploadEstimate: () => void;
+}) {
+  const [preview, setPreview] = useState<{ key: string; name: string } | null>(null);
   return (
     <Card role="region" aria-labelledby="inputs-title">
       <CardHeader
         id="inputs-title"
         title="Input documents"
-        subtitle="Collected automatically from the Documents section"
+        subtitle="Collected automatically from the Documents section. Click a file to preview it."
         action={
           <Link
             to={`/documents?dpr=${encodeURIComponent(dprId)}`}
@@ -211,29 +182,55 @@ function InputsCard({ dprId, docs }: { dprId: string; docs: DprDocuments }) {
               <span className="min-w-[12rem] flex-1 text-gray-900">
                 {spec.name}
               </span>
-              <span
-                className="min-w-0 max-w-full truncate text-xs text-gray-500 sm:max-w-[20rem]"
-                title={files.map((f) => f.name).join(", ")}
-              >
-                {files.length
-                  ? files.map((f) => f.name).join(", ")
-                  : status === "N/A"
-                    ? "Not applicable"
-                    : "Not uploaded yet"}
-              </span>
+              {files.length ? (
+                <span className="flex min-w-0 max-w-full flex-wrap gap-1 sm:max-w-[24rem]">
+                  {files.map((f) => (
+                    <button
+                      key={f.name}
+                      type="button"
+                      onClick={() => setPreview({ key: spec.key, name: f.name })}
+                      className="inline-flex min-w-0 max-w-full items-center gap-1 rounded border border-gray-200 px-1.5 py-0.5 text-xs text-gray-700 hover:border-gray-300 hover:bg-gray-50"
+                      title={`Preview ${f.name}`}
+                      aria-label={`Preview ${f.name}`}
+                    >
+                      <Eye className="h-3 w-3 shrink-0 text-gray-400" aria-hidden />
+                      <span className="truncate">{f.name}</span>
+                    </button>
+                  ))}
+                </span>
+              ) : (
+                <span className="text-xs text-gray-500">
+                  {status === "N/A" ? "Not applicable" : "Not uploaded yet"}
+                </span>
+              )}
               <Badge tone={STATUS_TONE[status]}>
                 {status === "Awaiting" ? "Missing" : status}
               </Badge>
               {BOQ_DOCUMENTS[spec.key] && (
                 <span className="w-full pl-9 text-xs text-gray-500">
-                  The BOQ PDF as received. The estimated BOQ workbook is
-                  uploaded in the Estimate tab.
+                  The BOQ PDF as received. The estimated BOQ workbook goes in
+                  the Estimate step:{" "}
+                  <button
+                    type="button"
+                    className="font-medium text-blue-700 underline-offset-2 hover:underline"
+                    onClick={onUploadEstimate}
+                  >
+                    Upload BOQ estimate
+                  </button>
                 </span>
               )}
             </li>
           );
         })}
       </ol>
+      {preview && (
+        <FilePreview
+          dprId={dprId}
+          docKey={preview.key}
+          name={preview.name}
+          onClose={() => setPreview(null)}
+        />
+      )}
     </Card>
   );
 }
@@ -242,14 +239,32 @@ function EstimateUploadCard({
   dprId,
   reads,
   onReview,
+  onRemoved,
+  pickNow,
+  onPicked,
 }: {
   dprId: string;
-  reads: BoqReadResult[];
+  reads: { docKey: string; read: BoqReadResult }[];
   onReview: (r: BoqReadResult) => void;
+  onRemoved: (fileName: string) => void;
+  /** Open the file picker as soon as the card shows (the "Upload BOQ estimate" button elsewhere). */
+  pickNow: boolean;
+  onPicked: () => void;
 }) {
   const readBoq = useReadBoqFiles(dprId);
+  const removeRead = useRemoveBoqRead(dprId);
   const toast = useToast();
-  const onFiles = (list: FileList | null) => {
+  const inputRef = useRef<HTMLInputElement>(null);
+  const [dragging, setDragging] = useState(false);
+  const [confirming, setConfirming] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!pickNow) return;
+    onPicked();
+    inputRef.current?.click();
+  }, [pickNow, onPicked]);
+
+  const onFiles = (list: FileList | File[] | null) => {
     const files = [...(list ?? [])];
     if (!files.length) return;
     readBoq.mutate(
@@ -271,16 +286,49 @@ function EstimateUploadCard({
       },
     );
   };
+  const remove = (docKey: string, fileName: string) => {
+    removeRead.mutate(
+      { docKey, fileName },
+      {
+        onSuccess: () => {
+          onRemoved(fileName);
+          toast({ title: "Upload removed", description: fileName });
+        },
+      },
+    );
+    setConfirming(null);
+  };
+
   return (
-    <Card role="region" aria-labelledby="estimate-upload-title">
+    <Card id="estimate-upload" role="region" aria-labelledby="estimate-upload-title" className="scroll-mt-4">
       <CardHeader
         id="estimate-upload-title"
-        title="Estimated BOQ workbook"
-        subtitle="Upload the estimate (.xlsx or old .xls). Items are read, checked against its own abstract, and priced from the rate catalog for you to review."
-        action={
-          <label className="btn-secondary cursor-pointer">
-            {readBoq.isPending ? "Reading…" : "Upload estimate (Excel)"}
+        title="Upload BOQ estimate"
+        subtitle="The estimate workbook (.xlsx, .xlsm or old .xls). Items are read, checked against its own abstract, and priced from the rate catalog for you to review."
+      />
+      <div className="p-4">
+        <div
+          onDragOver={(ev) => {
+            ev.preventDefault();
+            setDragging(true);
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(ev) => {
+            ev.preventDefault();
+            setDragging(false);
+            onFiles(ev.dataTransfer.files);
+          }}
+          className={`flex flex-col items-center justify-center gap-2 rounded-lg border-2 border-dashed px-4 text-center ${reads.length ? "py-4" : "py-8"} ${dragging ? "border-blue-500 bg-blue-50" : "border-gray-300 bg-gray-50"}`}
+        >
+          <FileSpreadsheet className="h-6 w-6 text-gray-400" strokeWidth={1.75} aria-hidden />
+          <p className="text-[13px] text-gray-700">
+            Drop the estimate workbook here, or
+          </p>
+          <label className="btn-primary cursor-pointer">
+            <Upload className="h-3.5 w-3.5" aria-hidden />
+            {readBoq.isPending ? "Reading…" : "Choose estimate file"}
             <input
+              ref={inputRef}
               type="file"
               accept=".xlsx,.xlsm,.xls"
               className="sr-only"
@@ -291,15 +339,63 @@ function EstimateUploadCard({
               }}
             />
           </label>
-        }
-      />
+        </div>
+      </div>
       {reads.length > 0 && (
-        <div className="pb-2">
-          <BoqReadState
-            files={reads.map((r) => ({ name: r.fileName }))}
-            reads={reads}
-            onReview={onReview}
-          />
+        <div className="border-t border-gray-200">
+          <h3 className="px-4 pt-3 text-xs font-medium text-gray-500">
+            Uploaded estimates
+          </h3>
+          <ul className="divide-y divide-gray-100 px-4 pb-1 text-[13px]">
+            {reads.map(({ docKey, read }) => (
+              <li
+                key={`${docKey}|${read.fileName}`}
+                className="flex flex-wrap items-center gap-x-3 gap-y-1 py-2"
+              >
+                <FileSpreadsheet className="h-4 w-4 shrink-0 text-emerald-600" aria-hidden />
+                <span className="min-w-0 truncate font-medium text-gray-800" title={read.fileName}>
+                  {read.fileName}
+                </span>
+                <span className="text-xs text-gray-400">{readDate(read.readAt)}</span>
+                <span className="text-xs">{readState(read)}</span>
+                <span className="ml-auto flex items-center gap-2">
+                  {confirming === `${docKey}|${read.fileName}` ? (
+                    <span role="alertdialog" aria-label={`Remove ${read.fileName}`} className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-gray-700">Remove this upload? Items already imported stay in the estimate.</span>
+                      <button type="button" className="btn-secondary h-7 px-2 text-xs" onClick={() => setConfirming(null)}>
+                        Cancel
+                      </button>
+                      <button type="button" className="btn-primary h-7 bg-rose-600 px-2 text-xs hover:bg-rose-700" onClick={() => remove(docKey, read.fileName)}>
+                        Yes, remove
+                      </button>
+                    </span>
+                  ) : (
+                    <>
+                      {!read.failure && (
+                        <button
+                          type="button"
+                          className="btn-secondary h-7 px-2 text-xs"
+                          onClick={() => onReview(read)}
+                        >
+                          Review &amp; import
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        className="btn-ghost h-7 px-2 text-xs text-gray-500 hover:text-rose-700"
+                        aria-label={`Delete ${read.fileName}`}
+                        title="Delete this upload"
+                        onClick={() => setConfirming(`${docKey}|${read.fileName}`)}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" aria-hidden />
+                        Delete
+                      </button>
+                    </>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
     </Card>
@@ -522,6 +618,17 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
     );
   };
   const reads = useBoqReads(dpr.id);
+  const [pickEstimate, setPickEstimate] = useState(false);
+  const clearPick = useCallback(() => setPickEstimate(false), []);
+  const uploadEstimate = () => {
+    setTab("estimate");
+    setPickEstimate(true);
+    requestAnimationFrame(() =>
+      document
+        .getElementById("estimate-upload")
+        ?.scrollIntoView?.({ block: "start", behavior: "smooth" }),
+    );
+  };
 
   if (!estimate.data)
     return (
@@ -589,7 +696,9 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
           {ready ? "Ready to submit" : "In preparation"}
         </Badge>
         <span className="text-xs text-gray-500">
-          {dpr.capacity} · {dpr.voltage} · {dpr.stream}
+          {[dpr.workType ?? "Station work", dpr.capacity, dpr.voltage, dpr.stream]
+            .filter(Boolean)
+            .join(" · ")}
         </span>
         <div className="ml-auto flex flex-wrap items-center gap-2">
           {confirmReset ? (
@@ -622,6 +731,10 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
               Reset to template
             </button>
           )}
+          <button type="button" className="btn-secondary" onClick={uploadEstimate}>
+            <Upload className="h-3.5 w-3.5" aria-hidden />
+            Upload BOQ estimate
+          </button>
           <button type="button" className="btn-secondary" onClick={download}>
             <Download className="h-3.5 w-3.5" aria-hidden />
             Download Excel
@@ -680,7 +793,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
           aria-labelledby="tab-inputs"
           className="space-y-4"
         >
-          <InputsCard dprId={dpr.id} docs={docs} />
+          <InputsCard dprId={dpr.id} docs={docs} onUploadEstimate={uploadEstimate} />
         </div>
       )}
       {tab === "estimate" && (
@@ -692,8 +805,15 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
         >
           <EstimateUploadCard
             dprId={dpr.id}
-            reads={Object.values(reads.data ?? {}).flat()}
+            reads={Object.entries(reads.data ?? {}).flatMap(([docKey, list]) =>
+              list.map((read) => ({ docKey, read })),
+            )}
             onReview={startReview}
+            onRemoved={(name) => {
+              if (reviewing?.fileName === name) setReviewing(null);
+            }}
+            pickNow={pickEstimate}
+            onPicked={clearPick}
           />
           {reviewing && (
             <BoqReview

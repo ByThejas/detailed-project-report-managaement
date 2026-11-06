@@ -51,7 +51,7 @@ describe('BOQ import', () => {
     renderAt(`/preparation?dpr=${enc}`);
     await userEvent.click(await screen.findByRole('tab', { name: /Estimate/ }));
 
-    const inputs = await screen.findByRole('region', { name: 'Estimated BOQ workbook' });
+    const inputs = await screen.findByRole('region', { name: 'Upload BOQ estimate' });
     expect(within(inputs).getByText('3 items read, 2 to check')).toBeInTheDocument();
     await userEvent.click(within(inputs).getByRole('button', { name: 'Review & import' }));
 
@@ -74,6 +74,40 @@ describe('BOQ import', () => {
     expect(within(partA).getAllByRole('spinbutton', { name: /^Quantity of/ }).map((i) => (i as HTMLInputElement).value)).toEqual(['2', '100', '1']);
     expect(within(partA).getByText('From kogali-boq.xlsx · Electrical row 3')).toBeInTheDocument();
     await waitFor(() => expect(sampleStore.estimate(DPR.id)!.lines.filter((l) => l.section === 'electrical')).toHaveLength(3));
+  });
+
+  it('deletes an uploaded estimate so it no longer shows', async () => {
+    seed([DPR]);
+    sampleStore.saveBoqRead(DPR.id, 'bill-of-quantity-electrical', await readBoqWorkbook(await boqWorkbook(), 'kogali-boq.xlsx', 'electrical'));
+    renderAt(`/preparation?dpr=${enc}`);
+    await userEvent.click(await screen.findByRole('tab', { name: /Estimate/ }));
+    const card = await screen.findByRole('region', { name: 'Upload BOQ estimate' });
+    await userEvent.click(within(card).getByRole('button', { name: 'Delete kogali-boq.xlsx' }));
+    await userEvent.click(within(card).getByRole('button', { name: 'Yes, remove' }));
+    await waitFor(() => expect(within(card).queryByText('kogali-boq.xlsx')).not.toBeInTheDocument());
+    expect(sampleStore.boqReads(DPR.id)['bill-of-quantity-electrical']).toHaveLength(0);
+  });
+
+  it('opens the Estimate step from the Upload BOQ estimate button', async () => {
+    seed([DPR]);
+    renderAt(`/preparation?dpr=${enc}`);
+    await userEvent.click((await screen.findAllByRole('button', { name: 'Upload BOQ estimate' }))[0]!);
+    expect(await screen.findByRole('tab', { name: /Estimate/ })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('region', { name: 'Upload BOQ estimate' })).toBeInTheDocument();
+  });
+
+  it('shows quantity × rate amounts in the review and updates them when a quantity changes', async () => {
+    seed([DPR]);
+    sampleStore.saveBoqRead(DPR.id, 'bill-of-quantity-electrical', await readBoqWorkbook(await boqWorkbook(), 'kogali-boq.xlsx', 'electrical'));
+    renderAt(`/preparation?dpr=${enc}`);
+    await userEvent.click(await screen.findByRole('tab', { name: /Estimate/ }));
+    await userEvent.click(await screen.findByRole('button', { name: 'Review & import' }));
+    const review = screen.getByRole('region', { name: /Review BOQ import/ });
+    expect(within(review).getByText('6,24,94,000')).toBeInTheDocument();
+    const qty = within(review).getByRole('spinbutton', { name: 'Quantity, row 3' });
+    await userEvent.clear(qty);
+    await userEvent.type(qty, '3');
+    expect(within(review).getByText('9,37,41,000')).toBeInTheDocument();
   });
 
   it('lets a flagged row be skipped instead', async () => {

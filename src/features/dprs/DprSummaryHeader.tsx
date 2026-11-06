@@ -9,8 +9,9 @@ export function DprSummaryHeader({ dpr }: { dpr: DprRow }) {
   const created = new Date(dpr.createdAt);
   const facts: [string, string][] = [
     ['Project type', dpr.stream],
+    ['Work type', dpr.workType ?? 'Station work'],
     ['Voltage class', dpr.voltage],
-    ['Capacity', dpr.capacity],
+    ['Capacity', dpr.capacity || (dpr.workType === 'Line work' ? 'Line work' : '')],
     ['Location', dpr.location],
     ['Zone', dpr.zone],
     ['Circle', dpr.circle],
