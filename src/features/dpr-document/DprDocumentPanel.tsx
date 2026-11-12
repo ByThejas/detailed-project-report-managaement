@@ -1,5 +1,5 @@
 import { useState, type CSSProperties } from 'react';
-import { ArrowRight, CheckCircle2, Circle, FileText, Plus, Trash2, TriangleAlert } from 'lucide-react';
+import { ArrowRight, CheckCircle2, Circle, FileDown, FileText, Plus, Trash2, TriangleAlert } from 'lucide-react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import type { DprDocuments } from '@/features/documents/types';
 import { filesOf } from '@/features/documents/state';
@@ -16,6 +16,7 @@ import { downloadPdfPack, type PackResult } from './pdfPack';
 import { blobBytes, getFile } from '@/lib/fileStore';
 import { extractFacts, readFileText, type FactSuggestion, type FileText as ReadText } from './extract';
 import { EMPTY_LOAD } from '@/features/preparation/load';
+import { EstimatePdfCard } from '@/features/estimate-pdf/EstimatePdfCard';
 import { MAX_VERSIONS, diffVersions, listVersions, saveVersion, snapshot, type DprVersion } from './versions';
 
 interface Props {
@@ -526,6 +527,7 @@ function ConsistencyCard({ checks, content, onAck, onGoTo }: { checks: CrossChec
 export function GenerateDprPanel({ dpr, estimate, documents, onGoTo, onChange, checks = [] }: Props & { onGoTo: (step: StepKey) => void; checks?: CrossCheck[] }) {
   const toast = useToast();
   const [busy, setBusy] = useState(false);
+  const [pdfOpen, setPdfOpen] = useState(false);
   const content = contentOf(dpr, estimate);
   const checklist = dprChecklist(estimate, documents, content, checks);
   const gaps = checklist.map((g) => g.label);
@@ -580,6 +582,8 @@ export function GenerateDprPanel({ dpr, estimate, documents, onGoTo, onChange, c
         </div>
       </Card>
 
+      <EstimatePdfCard dpr={dpr} estimate={estimate} open={pdfOpen} onOpenChange={setPdfOpen} />
+
       <Card role="region" aria-labelledby="dpr-outline-title">
         <CardHeader id="dpr-outline-title" title="What goes into the DPR" subtitle="Annexures 5, 7, 8 and 9 are your attached files; enclose them after the Word pages when printing" />
         <ol className="divide-y divide-gray-100">
@@ -591,6 +595,12 @@ export function GenerateDprPanel({ dpr, estimate, documents, onGoTo, onChange, c
                 <span className="text-gray-900">{p.title}</span>
                 <span className="text-xs text-gray-500">{p.note}</span>
               </span>
+              {p.no === '3.' && (
+                <button type="button" className="btn-secondary h-7 shrink-0 px-2 text-xs" onClick={() => setPdfOpen(true)}>
+                  <FileDown className="h-3 w-3" aria-hidden />
+                  PDF
+                </button>
+              )}
               {p.ok ? (
                 <span className="w-12 shrink-0" aria-hidden />
               ) : (
