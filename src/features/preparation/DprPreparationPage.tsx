@@ -608,6 +608,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
   const toast = useToast();
   const [confirmReset, setConfirmReset] = useState(false);
   const [reviewing, setReviewing] = useState<BoqReadResult | null>(null);
+  const [downloadBlocked, setDownloadBlocked] = useState(false);
   const [tab, setTabState] = useState<StepKey>("inputs");
   const setTab = (step: StepKey) => {
     setTabState(step);
@@ -638,7 +639,16 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
       />
     );
   const e = estimate.data;
-  const change = (next: Estimate) => save.mutate(next);
+  const change = (next: Estimate) =>
+    save.mutate(next, {
+      onError: () =>
+        toast({
+          title: "Estimate not saved",
+          description:
+            "The browser's storage is full or blocked. The changes stay until the page is closed, so download the Excel now, then delete old BOQ uploads to free space.",
+          tone: "error",
+        }),
+    });
   const collected = INPUT_SPECS.filter((s) => isCollected(docs, s.key)).length;
   const brownfield =
     dpr.stream !== "Greenfield" ||
@@ -654,7 +664,20 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
   const stepIndex = STEPS.findIndex((s) => s.key === tab);
   const next = STEPS[stepIndex + 1];
 
-  const download = async () => {
+  const download = async (anyway = false) => {
+    if (reviewing && !anyway) {
+      setDownloadBlocked(true);
+      return;
+    }
+    setDownloadBlocked(false);
+    if (!e.lines.length) {
+      toast({
+        title: "Nothing to download yet",
+        description: "The estimate has no items. Upload the BOQ estimate, review it and press Import, then download.",
+        tone: "error",
+      });
+      return;
+    }
     try {
       await exportEstimate(dpr, e);
     } catch {
@@ -681,6 +704,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
       description: `${reviewing!.fileName} into ${plan.sections.map(sectionLabel).join(", ")}`,
     });
     setReviewing(null);
+    setDownloadBlocked(false);
   };
 
   const reset = () => {
@@ -735,7 +759,7 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
             <Upload className="h-3.5 w-3.5" aria-hidden />
             Upload BOQ estimate
           </button>
-          <button type="button" className="btn-secondary" onClick={download}>
+          <button type="button" className="btn-secondary" onClick={() => download()}>
             <Download className="h-3.5 w-3.5" aria-hidden />
             Download Excel
           </button>
@@ -749,6 +773,34 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
           </button>
         </div>
       </div>
+
+      {downloadBlocked && reviewing && (
+        <div
+          role="alertdialog"
+          aria-label="Import before downloading"
+          className="flex flex-wrap items-center gap-3 rounded-lg border border-amber-200 bg-amber-50 px-4 py-2.5 text-[13px] text-amber-900"
+        >
+          <span className="min-w-0 flex-1">
+            {reviewing.fileName} is still under review and is not in the estimate yet, so the Excel would leave its items and rates out. Press Import at the foot of the review first.
+          </span>
+          <button
+            type="button"
+            className="btn-primary h-7 px-2 text-xs"
+            onClick={() => {
+              setDownloadBlocked(false);
+              setTab("estimate");
+              requestAnimationFrame(() =>
+                document.getElementById("boq-review-title")?.scrollIntoView?.({ block: "start", behavior: "smooth" }),
+              );
+            }}
+          >
+            Go to the review
+          </button>
+          <button type="button" className="btn-secondary h-7 px-2 text-xs" onClick={() => download(true)}>
+            Download without it
+          </button>
+        </div>
+      )}
 
       <SummaryStrip collected={collected} e={e} />
 

@@ -36,7 +36,8 @@ export const sampleStore = {
     return readJson<Record<string, Estimate>>(ESTIMATES_KEY, {})[dprId] ?? null;
   },
   saveEstimate(dprId: string, estimate: Estimate): Estimate {
-    writeJson(ESTIMATES_KEY, { ...readJson<Record<string, Estimate>>(ESTIMATES_KEY, {}), [dprId]: estimate });
+    if (!writeJson(ESTIMATES_KEY, { ...readJson<Record<string, Estimate>>(ESTIMATES_KEY, {}), [dprId]: estimate }))
+      throw new Error('The browser storage is full or blocked, so the estimate was not saved.');
     return estimate;
   },
   boqReads(dprId: string): BoqReads {

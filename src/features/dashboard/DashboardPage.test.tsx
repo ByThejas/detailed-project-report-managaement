@@ -31,10 +31,10 @@ describe('Dashboard', () => {
     expect(within(table).queryByText('PEENYA')).not.toBeInTheDocument();
   });
 
-  it('shows only Dashboard, DPR Initialization, DPR Reports and Documents in the menu', async () => {
+  it('lists every page in the menu', async () => {
     renderAt('/dashboard');
     const nav = await screen.findByRole('navigation', { name: 'Main' });
-    expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(['Dashboard', 'DPR Initialization', 'DPR Reports', 'Documents', 'DPR Preparation']);
+    expect(within(nav).getAllByRole('link').map((a) => a.textContent)).toEqual(['Dashboard', 'DPR Initialization', 'DPR Reports', 'Documents', 'DPR Preparation', 'Rate Catalog']);
   });
 
   it('hides the sidebar with the toggle and remembers it', async () => {

@@ -1,13 +1,13 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { BookOpen, TriangleAlert } from 'lucide-react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { formatNumber } from '@/lib/format';
 import { useToast } from '@/lib/toast';
 import { isMultiRate, type Estimate, type EstimateLine, type EstimateSection } from '@/features/preparation/types';
 import { sectionLabel } from '@/features/boq-import/toEstimateLine';
-import { loadRateCatalog } from './catalog';
+import { catalogName, useRateCatalog } from './catalog';
 import { forgetChoices, recalledChoices, rememberChoices, rememberedCount } from './memory';
-import { applySuggestion, buildIndex, exactCodeMatch, isReliable, oddRates, ratingDifferences, suggestRates, isSetBasis, nosInSet, rateRefOf, suggestionFor, tonnesPerNo, unitBasis, type LabourBasis, type OddRate, type RateIndex, type RateSuggestion } from './match';
+import { applySuggestion, exactCodeMatch, isReliable, isWeakMatch, jobContext, oddRates, sorDifferences, type SorDifference, ratingDifferences, suggestRates, isSetBasis, nosInSet, rateRefOf, suggestionFor, tonnesPerNo, unitBasis, usualSetNos, type LabourBasis, type OddRate, type RateIndex, type RateSuggestion } from './match';
 
 const rs = (n: number) => formatNumber(Math.round(n * 100) / 100);
 const PRICEABLE: EstimateSection[] = ['electrical', 'civil', 'line', 'lineCivil'];
@@ -41,58 +41,57 @@ interface Choice {
 export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { estimate: Estimate; onChange: (e: Estimate) => void; defaultOpen?: boolean }) {
   const toast = useToast();
   const [open, setOpen] = useState(defaultOpen);
-  const [index, setIndex] = useState<RateIndex | null>(null);
-  const [failed, setFailed] = useState(false);
+  // The catalog kept in the Rate Catalog page; loaded once the card is opened, and again when it changes.
+  const { catalog, index, failed } = useRateCatalog(open);
   const [section, setSection] = useState<EstimateSection | 'all'>('all');
   const [onlyMissing, setOnlyMissing] = useState(true);
   const [choices, setChoices] = useState<Record<string, Choice>>({});
   const [onlyOdd, setOnlyOdd] = useState(false);
+  const [onlyDiff, setOnlyDiff] = useState(false);
   /** Per line: how SoR labour per Set, per tonne or per tonne-metre turns into a rate per No. */
   const [bases, setBases] = useState<Record<string, LabourBasis>>({});
   // Bumped when remembered choices change, so the suggestions are worked out again.
   const [memoryVersion, setMemoryVersion] = useState(0);
 
-  useEffect(() => {
-    if (!open || index) return;
-    let live = true;
-    loadRateCatalog()
-      .then((c) => live && setIndex(buildIndex(c)))
-      .catch(() => live && setFailed(true));
-    return () => {
-      live = false;
-    };
-  }, [open, index]);
-
   const sections = PRICEABLE.filter((s) => estimate.lines.some((l) => l.section === s));
   // Rates already in the estimate that sit far from the SoR item the line surely is.
   const odd = useMemo(() => (index ? oddRates(index, estimate.lines.filter((l) => PRICEABLE.includes(l.section))) : []), [index, estimate.lines]);
   const oddById = new Map<string, OddRate>(odd.map((o) => [o.line.id, o]));
+  // Rates that are not the rate of the SoR item the line surely is. The rate catalog is the rate source, so these start ticked.
+  const diffs = useMemo(() => (index ? sorDifferences(index, estimate.lines.filter((l) => PRICEABLE.includes(l.section))) : []), [index, estimate.lines]);
+  const diffById = new Map<string, SorDifference>(diffs.map((d) => [d.line.id, d]));
   const lines = estimate.lines.filter(
-    (l) => PRICEABLE.includes(l.section) && (section === 'all' || l.section === section) && l.description.trim() && (onlyOdd ? oddById.has(l.id) : !onlyMissing || !hasRate(l)),
+    (l) =>
+      PRICEABLE.includes(l.section) &&
+      (section === 'all' || l.section === section) &&
+      l.description.trim() &&
+      (onlyDiff ? diffById.has(l.id) : onlyOdd ? oddById.has(l.id) : !onlyMissing || !hasRate(l) || diffById.has(l.id)),
   );
   const multiCols = section === 'all' ? lines.some((l) => isMultiRate(l.section)) : isMultiRate(section);
   const suggestions = useMemo(() => {
     const out = new Map<string, RateSuggestion[]>();
     if (index) {
       const recalled = recalledChoices(index, lines);
+      // What the whole estimate says (its one conductor, existing towers, ampacity) helps lines that leave it out.
+      const job = jobContext(estimate.lines);
       for (const l of lines) {
         // The line's own SR code first, then the item chosen before for this wording, then matches by wording.
-        const first = exactCodeMatch(index, l) ?? recalled.get(l.id) ?? null;
-        const rest = suggestRates(index, l, 3).filter((x) => x.item.id !== first?.item.id);
+        const first = exactCodeMatch(index, l) ?? recalled.get(l.id) ?? diffById.get(l.id)?.match ?? null;
+        const rest = suggestRates(index, { ...l, job }, 3).filter((x) => x.item.id !== first?.item.id);
         out.set(l.id, first ? [first, ...rest.slice(0, 2)] : rest);
       }
     }
     return out;
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [index, section, onlyMissing, onlyOdd, estimate.lines, memoryVersion]);
+  }, [index, section, onlyMissing, onlyOdd, onlyDiff, diffs, estimate.lines, memoryVersion]);
 
   // Only a line that names its SoR code, with that exact item found, starts ticked.
   const isExact = (id: string) => Boolean(suggestions.get(id)?.[0]?.exact);
-  const choiceOf = (id: string): Choice => choices[id] ?? { pick: 0, code: '', apply: isExact(id) };
+  const choiceOf = (id: string): Choice => choices[id] ?? { pick: 0, code: '', apply: isExact(id) || diffById.has(id) };
   const exactCount = lines.filter((l) => isExact(l.id)).length;
   const isRemembered = (id: string) => Boolean(suggestions.get(id)?.[0]?.remembered);
   const rememberedIds = lines.filter((l) => !hasRate(l) && isRemembered(l.id)).map((l) => l.id);
-  const reliableIds = lines.filter((l) => !hasRate(l) && !isExact(l.id) && !isRemembered(l.id) && suggestions.get(l.id)?.[0] && isReliable(l, suggestions.get(l.id)![0]!)).map((l) => l.id);
+  const reliableIds = lines.filter((l) => !hasRate(l) && !isExact(l.id) && !isRemembered(l.id) && suggestions.get(l.id)?.[0] && isReliable(l, suggestions.get(l.id)![0]!, suggestions.get(l.id)![1] ?? null)).map((l) => l.id);
   const setChoice = (id: string, patch: Partial<Choice>) => setChoices((c) => ({ ...c, [id]: { ...choiceOf(id), ...patch } }));
   const basisOf = (l: EstimateLine): LabourBasis => ({ tonnes: tonnesPerNo(l), ...bases[l.id] });
   const setBasis = (id: string, patch: Partial<LabourBasis>) => setBases((b) => ({ ...b, [id]: { ...b[id], ...patch } }));
@@ -140,7 +139,7 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
       <CardHeader
         id="rates-title"
         title="Price from the rate catalog"
-        subtitle="Common SoR 2023-24 (rate_catalog 76): supply, erection and T&C rates. Items whose BOQ names the exact SoR code start ticked; every match by wording waits for your tick. Nothing is applied until you click Apply."
+        subtitle={`${catalog ? catalogName(catalog) : 'The rate catalog'} (kept in the Rate Catalog page): supply, erection and T&C rates. Items whose BOQ names the exact SoR code start ticked; every match by wording waits for your tick. Nothing is applied until you click Apply.`}
         action={
           <button type="button" className="btn-secondary" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
             <BookOpen className="h-3.5 w-3.5" aria-hidden />
@@ -168,6 +167,25 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
             </label>
             <span className="text-xs text-gray-500">Or type an SoR code in a row (e.g. 1.10) to take that exact item.</span>
           </div>
+          {diffs.length > 0 && (
+            <div role="status" aria-label="Rates that differ from the SoR" className="border-b border-rose-200 bg-rose-50 px-4 py-2.5 text-xs text-rose-900">
+              <p className="flex items-start gap-1.5 font-medium">
+                <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
+                {diffs.length} {diffs.length === 1 ? 'rate differs' : 'rates differ'} from the SoR item the line surely is. {diffs.length === 1 ? 'It is' : 'They are'} ticked below to take the SoR rate; untick to keep the estimate’s.
+                <button type="button" className="btn-ghost -my-1 ml-auto h-7 text-xs" onClick={() => setOnlyDiff((v) => !v)}>
+                  {onlyDiff ? 'Show all items' : 'Show only these'}
+                </button>
+              </p>
+              <ul className="mt-1 space-y-0.5 pl-5">
+                {diffs.slice(0, 8).map((d) => (
+                  <li key={d.line.id}>
+                    {d.line.code || d.line.description.slice(0, 40)}: Rs {rs(d.line.supplyRate)} per {d.line.unit} in the estimate, SoR {d.match.item.code} is Rs {rs(d.match.supplyRate)}.
+                  </li>
+                ))}
+                {diffs.length > 8 && <li>…and {diffs.length - 8} more.</li>}
+              </ul>
+            </div>
+          )}
           {odd.length > 0 && (
             <div role="status" aria-label="Rates far from the SoR" className="border-b border-amber-200 bg-amber-50 px-4 py-2.5 text-xs text-amber-900">
               <p className="flex items-start gap-1.5 font-medium">
@@ -268,6 +286,11 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
                           ) : (
                             c.pick === -1 && c.code && <p className="mt-1 text-xs text-rose-700">No item with that code.</p>
                           )}
+                          {c.pick !== -1 && sugg.length > 0 && isWeakMatch(sugg[0]) && (
+                            <p className="text-xs text-amber-700">
+                              No close SoR item: these are only loose guesses, and SoR 76 may not list this item{l.section === 'civil' || l.section === 'lineCivil' ? ' (most civil work is priced from the KPWD schedule, which is not in the catalog)' : ''}. Enter the rate from the approved source, or type the SoR code.
+                            </p>
+                          )}
                           {s && ratingDifferences(l, s.item).length > 0 && (
                             <p className="text-xs font-medium text-rose-700">Not the same rating: {ratingDifferences(l, s.item).join('; ')}. Check before ticking.</p>
                           )}
@@ -288,10 +311,10 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
                                     <select
                                       aria-label={`Nos in one Set for ${label}`}
                                       className="input h-7 w-auto text-xs"
-                                      value={b.setNos ?? ''}
-                                      onChange={(ev) => setBasis(l.id, { setNos: ev.target.value ? Number(ev.target.value) : undefined })}
+                                      value={b.setNos ?? need.setNosStated ?? usualSetNos(s.item)}
+                                      onChange={(ev) => setBasis(l.id, { setNos: Number(ev.target.value) })}
                                     >
-                                      <option value="">Not added</option>
+                                      <option value={0}>Not added</option>
                                       {[...new Set([need.setNosStated ?? 3, 1, 3])].sort((a, z) => a - z).map((n) => (
                                         <option key={n} value={n}>
                                           1 Set = {n} {n === 1 ? 'No' : 'Nos'}

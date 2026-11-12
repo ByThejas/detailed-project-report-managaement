@@ -1,6 +1,6 @@
 import catalog from '@/data/rateCatalog.json';
 import { newLine } from '@/features/preparation/template';
-import { applySuggestion, buildIndex, exactCodeMatch, highestKv, isLabourOnly, isReliable, itemOfRateRef, oddRates, ratingDifferences, rateRefOf, suggestRates, suggestionFor, tokens, tonnesPerNo, unitBasis, unitFactor, unitKind } from './match';
+import { applySuggestion, buildIndex, certainMatch, sorDifferences, exactCodeMatch, highestKv, isLabourOnly, isReliable, itemOfRateRef, oddRates, ratingDifferences, rateRefOf, suggestRates, suggestionFor, tokens, tonnesPerNo, unitBasis, unitFactor, unitKind, usualSetNos, kvClasses, itemKv, jobContext, isWeakMatch } from './match';
 import type { RateCatalog } from './types';
 
 const index = buildIndex(catalog as RateCatalog);
@@ -35,7 +35,7 @@ describe('rate catalog', () => {
     expect(unitKind('Mtrs.')).toBe('length');
     expect(unitKind('t/m')).toBe('weightDistance');
     expect(unitKind('m³')).toBe('volume');
-    expect(tokens('20MVA, 66/11kV Drake ACSR')).toEqual(['20', '20mva', 'mva', '66', '11', '11kv', 'kv', 'drake', 'acsr']);
+    expect(tokens('20MVA, 66/11kV Drake ACSR')).toEqual(['20', '20mva', 'mva', '66', '66kv', 'kv', '11', '11kv', 'kv', 'drake', 'acsr']);
   });
 });
 
@@ -84,10 +84,11 @@ describe('units and kept rates', () => {
     expect(unitBasis("No's")).toBe('no');
     expect(unitBasis('No (6.907 MT)')).toBe('no');
     expect(unitBasis('per Stack')).toBe('no');
+    // A unit that states its set ("Set (3 Nos.)") is divided by it for a line in Nos.
     const s = suggestionFor(item('Set (3 Nos.)', [{ unit: 'Set (3 Nos.)', rate: 300 }]), { unit: 'No', section: 'electrical' });
-    expect(s.unitMatches).toBe(false);
-    expect(s.erectionRate).toBe(0);
-    expect(s.notApplied).toHaveLength(1);
+    expect(s).toMatchObject({ supplyRate: 1000 / 3, erectionRate: 100, notApplied: [], unitMatches: true });
+    // The estimator can say a Set is not to be added at all.
+    expect(suggestionFor(item('Set', [{ unit: 'Set', rate: 300 }]), { unit: 'No', section: 'electrical', basis: { setNos: 0 } }).notApplied).toHaveLength(1);
     // The same item on a line counted in sets of three takes the labour rate.
     expect(suggestionFor(item('Set (3 Nos.)', [{ unit: 'Set (3 Nos.)', rate: 300 }]), { unit: 'Set (3 Nos)', section: 'electrical' }).erectionRate).toBe(300);
   });
@@ -103,13 +104,19 @@ describe('units and kept rates', () => {
 
   it('turns SoR labour per Set into a rate per No once the estimator says what a Set is', () => {
     const it3 = item('Set (3 Nos.)', [{ unit: 'Set (3 Nos.)', rate: 300 }]);
-    // Not guessed: a BOQ "No" is one unit for some items and a set of three for others.
-    expect(suggestionFor(it3, { unit: 'No', section: 'electrical' }).notApplied).toHaveLength(1);
+    expect(suggestionFor(it3, { unit: 'No', section: 'electrical' }).erectionRate).toBe(100);
     const s3 = suggestionFor(it3, { unit: 'No', section: 'electrical', basis: { setNos: 3 } });
     expect(s3).toMatchObject({ supplyRate: 1000 / 3, erectionRate: 100, notApplied: [], unitMatches: true });
     const perSet = item('Set', [{ unit: 'Set', rate: 9000 }], [{ unit: 'Set', rate: 600 }]);
     expect(suggestionFor(perSet, { unit: 'No', section: 'electrical', basis: { setNos: 1 } })).toMatchObject({ supplyRate: 1000, erectionRate: 9000, testingRate: 600 });
     expect(suggestionFor(perSet, { unit: 'No', section: 'electrical', basis: { setNos: 3 } })).toMatchObject({ erectionRate: 3000, testingRate: 200 });
+    // Unless the estimator says otherwise, a Set of single-phase units (CTs, PTs, arresters) is three Nos and any other Set is one.
+    expect(suggestionFor(perSet, { unit: 'No', section: 'electrical' })).toMatchObject({ erectionRate: 9000, testingRate: 600 });
+    const ct = { ...perSet, item: 'CURRENT TRANSFORMER : Oil filled Current Transformer 66 kV' };
+    expect(suggestionFor(ct, { unit: 'No', section: 'electrical' })).toMatchObject({ erectionRate: 3000, testingRate: 200 });
+    expect(usualSetNos({ ...ct, item: '11 kV NCT : 1200-800/1-1-1 A' })).toBe(1);
+    expect(usualSetNos({ ...perSet, item: 'SURGE ARRESTOR : 60 kV Metal Oxide' })).toBe(3);
+    expect(usualSetNos({ ...perSet, labour: [{ text: 'Erection of CTs and PTs [set/3]', unit: 'Set', rate: 4515, sr: '' }] })).toBe(3);
   });
 
   it('prices transformer haulage per tonne-metre and erection per tonne from the weight the estimator gives', () => {
@@ -205,8 +212,10 @@ describe('wording that changes the item (tested on 21 KPTCL estimate workbooks)'
 
   it('does not tick hardware made for another conductor', () => {
     const line = { description: 'Mid Span Compression Joint', unit: 'Nos', section: 'line' as const, group: 'Accessories for Coyote ACSR' };
-    const moose = suggestRates(index, { ...line, group: '' }, 5).find((x) => /Moose/.test(x.item.item))!;
-    expect(isReliable(line, moose)).toBe(false);
+    // "Mid span compression joint" is the SoR's "M.S.C. Joints", which it prices per conductor.
+    const other = suggestRates(index, { ...line, group: '' }, 5).find((x) => /Moose|Drake/.test(x.item.item))!;
+    expect(other.item.item).toMatch(/M\.S\.C\. Joints/);
+    expect(isReliable(line, other)).toBe(false);
   });
 
   it('keeps CT ratio, arrester class and the indoor/outdoor version apart', () => {
@@ -259,5 +268,120 @@ describe('an SoR item of another rating (Harappanahalli, 8 MVA 110/11 kV)', () =
     expect(itemOfRateRef(index, priced.rateRef)!.code).toBe('1.13');
     const [o] = oddRates(index, [priced]);
     expect(o!.why).toBe('was priced from SoR 1.13, which is 66 kV, not 110 kV');
+  });
+});
+
+describe('a rate that is not the SoR rate (Telagi, 12.5 MVA 66/11 kV at Rs 2,18,37,000)', () => {
+  const pt = {
+    ...newLine('electrical', '8'),
+    description:
+      '12.5MVA, 66/11 kV Transformer : 3 Ph, 50 Hz, Core type, 2 winding Delta/Star, Vector Group: DYn11, OLTC, ONAN/ONAF with Fan control cubicle, RTCC Panel, first filling of oil and 10% spare oil in non-returnable drums, etc., complete with Terminal connector suitable for single Drake ACSR on primary side and secondary of Transformer and copper flat on 11 kV neutral side as per technical specification',
+    unit: 'Nos.',
+    qty: 1,
+    supplyRate: 21_837_000,
+  };
+
+  it('is surely SoR 1.11, as the rating matches and the next item is far behind', () => {
+    expect(certainMatch(index, pt)?.item.code).toBe('1.11');
+  });
+
+  it('is listed as differing from the SoR, and a line at the SoR rate is not', () => {
+    const [d] = sorDifferences(index, [pt]);
+    expect(d!.match.supplyRate).toBe(20_715_000);
+    expect(sorDifferences(index, [{ ...pt, supplyRate: 20_715_000 }])).toEqual([]);
+  });
+
+  it('never trusts a different rating', () => {
+    expect(certainMatch(index, { ...pt, description: pt.description.replace('12.5MVA', '14 MVA') })).toBeNull();
+  });
+});
+
+// Round 11 (2026-11-11), measured on the 21 estimate workbooks in E:\BOQ (758 distinct priced lines): top-1 367 → 445,
+// top-3 384 → 480, erection right 87 → 161, T&C right 9 → 39, trusted matches 98 → 121. Run src/eval/match.eval.test.ts
+// with BOQ_DIR=E:/BOQ to measure again.
+describe('text matching, round 11', () => {
+  const top = (line: Parameters<typeof suggestRates>[1]) => suggestRates(index, line, 1)[0]!;
+
+  it('reads the SoR’s own names for joints, isolators and HTLS conductor', () => {
+    expect(top({ description: 'Accessories for ACSR Drake conductor: — Mid Span Compression Joint', unit: 'Nos', section: 'line' }).item.code).toBe('46.6.2');
+    expect(top({ description: 'Splice(MSC)', unit: "No's", section: 'line', group: 'Accessories for ACSR Coyote conductor' }).item.code).toBe('46.6.4');
+    expect(top({ description: 'GOS for CB : 11 kV isolator, double break 800 A, 25 KA capacity with rigid bi-metallic terminal connector', unit: 'Set', section: 'electrical' }).item.code).toBe('59.1.2');
+    expect(tokens('HTLS conductor')).toContain('hpc');
+  });
+
+  it('takes an item for several voltages ("220/110/66/33 kV") as suiting each, and a panel by the class it names last', () => {
+    expect([...kvClasses('Post Insulator Clamps 220/110/66/33 kV')].sort((a, b) => a - b)).toEqual([33, 66, 110, 220]);
+    expect([...kvClasses('POWER TRANSFORMER 12.5 MVA, 66/11 kV Transformer : copper flat on 11 kV side')]).toEqual([66]);
+    expect([...itemKv(byCode('16.2.3'))]).toEqual([66]);
+    expect(top({ description: 'For 66 kV Transmission line', unit: 'No.', section: 'electrical', group: 'Relay & protection Panel : Simplex type control and relay panels' }).item.code).toBe('16.2.3');
+  });
+
+  it('prices steel structures from tower steel by weight', () => {
+    const iso = top({ description: '66 kV Isolators (0.532 t per structure)', unit: 'No (0.532 MT)', qty: 1, section: 'electrical', group: 'Mounting Structures: (Including Bolt & Nuts)' });
+    expect(iso.item.code).toBe('18.2');
+    expect(iso.supplyRate).toBeCloseTo(141_680 * 0.532, 2);
+    expect(top({ description: "b) +6M Extension to 'NB DC - D' Type Tower", unit: 'MT', section: 'line', group: "A) TOWER TYPE 110KV 'NB DC - D'" }).item.code).toBe('18.2');
+    // Under a heading for the bolts themselves, and on the "(contd.)" row of a structure, it is bolts and nuts.
+    expect(top({ description: "a) Normal Tower Type 'NB DC - A'", unit: 'MT', section: 'line', group: 'Supply of Galvanised Bolts, Nuts and washers etc., 110kV DC' }).item.code).toBe('18.3');
+    expect(top({ description: '66 KV Isolators Mounting Structure (Weight of steel=0.522) (Weight of Nuts & Bolts=0.010) (contd.)', unit: 't', section: 'electrical', group: '66kV Mounting Structures:' }).item.code).toBe('18.3');
+    expect(unitKind('MT (2 No)')).toBe('weight');
+  });
+
+  it('lets the heading name the item when the line only qualifies it', () => {
+    expect(top({ description: 'For Tr HV side', unit: 'No.', section: 'electrical', group: '110 kV, 1250 A, 40kA SF6 CB' }).item.code).toBe('3.3');
+  });
+
+  it('uses what the whole estimate says about the work', () => {
+    const job = jobContext([{ description: 'High Performance Conductor of Ampacity-700 Amps on exiting towers' }]);
+    expect(job).toEqual(['hpc', 'existing', '700a']);
+    expect(top({ description: 'Vibration dampers', unit: 'No.s', section: 'line', job }).item.code).toBe('44.8.3');
+  });
+
+  it('finds station services in the utilization schedule', () => {
+    expect(top({ description: 'Rubber mats 1000 mm x 1000 mm x 10 mm size suitable for 1.1 kV class.', unit: 'Nos.', section: 'electrical' }).item.code).toBe('15.117');
+  });
+
+  it('says when no SoR item is close', () => {
+    const civil = suggestRates(index, { description: 'Supplying PVC ringtite pipes conforming to IS 4985:2000 with latest amendments and conveying to worksite, rolling and lowering into trenches, laying true to line', unit: 'm', section: 'civil' }, 1)[0];
+    expect(isWeakMatch(civil)).toBe(true);
+    expect(isWeakMatch(top({ description: 'Mid Span Compression Joint', unit: 'Nos', section: 'line', group: 'Accessories for ACSR Drake conductor' }))).toBe(false);
+  });
+});
+
+describe('erection and T&C rates, round 11', () => {
+  it('divides the Set rates of CTs by three, as the SoR marks "[set/3]"', () => {
+    const s = suggestionFor(byCode('5.2.8'), { unit: 'No', section: 'electrical' });
+    expect(s.erectionRate).toBe(4515 / 3);
+    expect(s.testingRate).toBeCloseTo((11_264 + 2837) / 3, 6);
+    // A breaker's Set is one No.
+    expect(suggestionFor(byCode('3.4'), { unit: 'No', section: 'electrical' })).toMatchObject({ erectionRate: 8652, testingRate: 33_813 + 8487 });
+  });
+
+  it('charges tower assembly and erection per tonne, leaving sorting for the estimator to add', () => {
+    const s = suggestionFor(byCode('18.2'), { unit: 'MT', section: 'line' });
+    expect(s.erectionRate).toBe(5983);
+    expect(s.notApplied.map((c) => c.rate)).toEqual([453]);
+  });
+
+  it('takes the one child rate the line names, the panel of its own class, and a blank unit as the item’s', () => {
+    expect(suggestionFor(byCode('19.2'), { unit: 'Nos', section: 'line', description: 'a) Number Plates (1 No. per tower)' } as never).erectionRate).toBe(83);
+    expect(suggestionFor(byCode('16.2.3'), { unit: 'No', section: 'electrical' }).erectionRate).toBe(4191);
+    expect(suggestionFor(byCode('13.6'), { unit: '', section: 'electrical' }).erectionRate).toBe(15);
+  });
+});
+
+describe('trusted matches, round 11', () => {
+  it('trusts a clear lead without a rating, and still finds the SoR item when the workbook used another one’s rate', () => {
+    const joint = { description: 'Accessories for ACSR Drake conductor: — Repair sleeves', unit: 'Nos', section: 'line' as const };
+    expect(certainMatch(index, joint)?.item.code).toBe('46.8.2');
+    // 4250 mm live point height is SoR 9.12.1 (Rs 2,90,400); the workbook priced it as the 4600 mm 9.13.1 (Rs 2,78,300).
+    const iso = {
+      ...newLine('electrical', '1'),
+      description: 'ISOLATORS : 66kV, 1250 A, 40 kA double break with manually operated isolators with solid core insulator, terminal connector suitable for Al. tube/conductor, marshalling box etc., complete as per technical specification. — Upright mounting type with Earth switch(Live point height 4250mm)',
+      unit: 'Nos.',
+      qty: 1,
+      supplyRate: 278_300,
+    };
+    expect(sorDifferences(index, [iso])[0]?.match.item.code).toBe('9.12.1');
   });
 });

@@ -8,10 +8,12 @@ export function readJson<T>(key: string, fallback: T): T {
   }
 }
 
-export function writeJson(key: string, value: unknown): void {
+/** Returns false when the value could not be kept (storage full or blocked): it then lives for this page view only. */
+export function writeJson(key: string, value: unknown): boolean {
   try {
     window.localStorage.setItem(key, JSON.stringify(value));
+    return true;
   } catch {
-    // Storage unavailable: the value lives for this page view only.
+    return false;
   }
 }

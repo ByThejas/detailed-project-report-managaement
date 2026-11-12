@@ -42,6 +42,16 @@ const SYNONYMS: [RegExp, string][] = [
   [/\bclass\s*[-:]?\s*(?:iii|3)\b/g, 'class3'],
   [/\bclass\s*[-:]?\s*(?:ii|2)\b/g, 'class2'],
   [/\bhigh\s+tensile(?:\s+steel)?\b/g, 'ht'],
+  // Mid span compression joints: "M.S.C. Joints", "MSC joint", "Splice (MSC)".
+  [/\bmid[\s-]*span\s+compression\s+joints?\b|\bsplice\s*\(?\s*msc\s*\)?|\bmsc\s+joints?\b/g, 'msc joint'],
+  // Isolator breaks: "D/B", "double break", "S/B", "single break".
+  [/\bd\s*\/\s*b\b|\bdouble\s*-?\s*break\b/g, 'doublebreak'],
+  [/\bs\s*\/\s*b\b|\bsingle\s*-?\s*break\b/g, 'singlebreak'],
+  // An 11 kV GOS is an isolator.
+  [/\bg\.?o\.?s\b/g, 'gos isolator'],
+  // HTLS conductor is what the SoR calls High Performance Conductor (HPC).
+  [/\bhtls\b/g, 'hpc'],
+  [/\bhigh\s+performance\s+conductor\b/g, 'hpc'],
 ];
 
 /** Plural and singular are the same word: "cables" = "cable", "isolators" = "isolator". */
@@ -61,12 +71,14 @@ export function tokens(text: string): string[] {
       .replace(/sq\.?\s*mm/g, 'sqmm')
       // "4C x 6", "4 Core", "4-core" and "4c" all name the core count.
       .replace(/(\d)\s*-?\s*(?:cores?|c)\b/g, '$1 core')
+      // "220/110/66 kV" names each of 220 kV, 110 kV and 66 kV.
+      .replace(/(\d+(?:\.\d+)?)((?:\s*[/-]\s*\d+(?:\.\d+)?)+)\s*kv\b/g, (_, a: string, rest: string) => [a, ...rest.match(/\d+(?:\.\d+)?/g)!].map((v) => `${v} kv`).join(' '))
       .replace(/(\d)\s*(kv|mva|kva|ka|mm|sqmm|mt|v|a|ah|w|kn)\b/g, '$1 $2')
       .match(/\d+(?:\.\d+)?|[a-z]+/g) ?? []
   )
     // "6.0" and "6" are the same number.
     .map((t) => (/^\d+\.\d+$/.test(t) ? String(Number(t)) : singular(t)))
-    .filter((t) => !STOP.has(t) && (t.length > 1 || /\d/.test(t) || t === 'a'));
+    .filter((t) => t === 'a' || (!STOP.has(t) && (t.length > 1 || /\d/.test(t))));
   const out: string[] = [];
   parts.forEach((t, i) => {
     // "a" counts only as amperes after a number ("1250 A"), never on its own.
@@ -83,6 +95,8 @@ export function unitKind(unit: string): UnitKind {
   const u = unit.toLowerCase().replace(/[^a-z0-9/³²]/g, '');
   if (!u) return 'other';
   if (/^(t\/m|pert\/m|mt\/m)/.test(u)) return 'weightDistance';
+  // "MT (2 No)": tonnes, with the count of towers alongside.
+  if (/^\s*(?:mt|t|tonnes?)\s*\(/i.test(unit)) return 'weight';
   if (/^(no|nos|nos|each|set|sets|stack|stacks|bay|perbay|pair|unit|units|lot)/.test(u) || /^no\(/.test(unit.toLowerCase())) return 'count';
   if (/^(km|routekm|perkm|ckm)/.test(u)) return 'km';
   if (/^(m|mtr|mtrs|rmtr|rm|metre|meter|metres|meters|rmt)$/.test(u)) return 'length';
@@ -95,7 +109,7 @@ export function unitKind(unit: string): UnitKind {
 
 /** Catalog sheets to search for each BOQ part. */
 const SHEETS: Record<EstimateSection, (sheet: string) => boolean> = {
-  electrical: (s) => s === 'By code' || s.startsWith('SR-CSR'),
+  electrical: (s) => s === 'By code' || s.startsWith('SR-CSR') || s === 'utilization works',
   line: (s) => s === 'By code' || s.startsWith('SR-CSR'),
   civil: (s) => s.includes('Civil') || s.startsWith('utilization'),
   lineCivil: (s) => s.includes('Civil') || s === 'By code',
@@ -108,8 +122,8 @@ export interface RateIndex {
   idf: Map<string, number>;
   /** Weighted size of each item's word set, for the cosine score. */
   norms: number[];
-  /** Highest voltage class named in each item, or null. */
-  hv: (number | null)[];
+  /** Voltage classes each item is for (empty when it names none). */
+  hv: Set<number>[];
 }
 
 /** Rated equipment voltages name their system voltage: a 72.5 kV breaker is for a 66 kV system. */
@@ -122,15 +136,69 @@ export function highestKv(text: string): number | null {
   return found.length ? Math.max(...found) : null;
 }
 
+/**
+ * Voltage classes an item is for. "110/33-11 kV" is a 110 kV item (the first of a short run is the highest), but a run of
+ * three or more ("220/110/66/33 kV" clamps) lists the classes the item suits, and an item naming "110 kV, 66 kV & 33 kV"
+ * suits each of them.
+ */
+export function kvClasses(text: string): Set<number> {
+  const out = new Set<number>();
+  let top: number | null = null;
+  for (const m of text.toLowerCase().matchAll(/(\d+(?:\.\d+)?)\s*((?:[/-]\s*\d+(?:\.\d+)?\s*)*)kv\b/g)) {
+    const run = [m[1]!, ...(m[2]!.match(/\d+(?:\.\d+)?/g) ?? [])].map((v) => EQUIPMENT_KV[Number(v)] ?? Number(v));
+    if (run.length >= 3) for (const v of run) out.add(v);
+    top = Math.max(top ?? 0, ...run);
+  }
+  if (top !== null) out.add(top);
+  return out;
+}
+
+/**
+ * Steel structures (towers, station beams and columns, equipment mounting structures, cross arms) are priced from the SoR's
+ * tower steel by weight. Their BOQ wording ("6T1 station towers", "66 kV isolator mounting structure (0.532 MT)") shares
+ * almost no words with "Fabrication, galvanising and supply of Mild Steel tower materials", so both get a shared token.
+ */
+const STEEL = 'steelwork';
+const isSteelItem = (i: Pick<CatalogItem, 'item' | 'unit'>) =>
+  unitBasis(i.unit) === 'weight' && /tower materials|bolts\s*&\s*nuts|steel pole structure/i.test(i.item);
+/** "including bolts & nuts", "with bolts and nuts (0.011 MT)", "(Weight of Nuts & Bolts=0.010)", "+ 5% B&N". */
+const INCLUDED_BOLTS = /\b(?:including|incl\.?|with|along\s+with)\s+(?:the\s+)?(?:galvani[sz]ed\s+)?bolts?\s*(?:&|and|,)\s*nuts?(?:\s*(?:&|and|,)\s*washers?)?|\(?\s*weight\s+of\s+(?:nuts?|bolts?)[^)]*\)?|(?:\(\s*)?[\d.]+\s*mt\s+per\s+structure\s+for\s+bolts?\s*(?:&|and)\s*nuts?\s*\)?|\+\s*\d+\s*%\s*b\s*&\s*n/gi;
+const BOLT_WORDS = ['bolt', 'nut', 'washer'];
+const STRUCTURE_WORDS = /\b(structures?|towers?|beams?|columns?|verticals?|lattice|cross\s*-?\s*arms?|extensions?|girders?|stools?|pedestals?)\b/i;
+/** A line for steel bought by weight: in tonnes, or in Nos that carry a weight, and naming a structure. */
+export const isSteelStructureLine = (line: Pick<EstimateLine, 'description' | 'unit'> & { qty?: number; group?: string; basis?: LabourBasis }) =>
+  (unitBasis(line.unit) === 'weight' || /^mt\s*\(/i.test(line.unit.trim()) || (unitBasis(line.unit) === 'no' && !!weightPerNo(line))) &&
+  STRUCTURE_WORDS.test(`${line.description} ${line.group ?? ''}`);
+
+/** Every voltage class a text names, in order. */
+const kvMentions = (text: string) => [...text.toLowerCase().matchAll(/(\d+(?:\.\d+)?)\s*kv\b/g)].map((m) => EQUIPMENT_KV[Number(m[1])] ?? Number(m[1]));
+
+/**
+ * Voltage classes of a catalog item from its most specific words: "CONTROL & RELAY PANEL : 110 kV, 66 kV & 33 kV
+ * Sub-station : Simplex … 66 kV Panel for Overhead Line" is a 66 kV panel, not one for every class its chapter names.
+ */
+export function itemKv(item: Pick<CatalogItem, 'item' | 'context'>): Set<number> {
+  const parts = item.item.split(/\s:\s/);
+  if (parts.length > 1 && new Set(kvMentions(parts.slice(0, -1).join(' '))).size >= 3) {
+    const last = kvClasses(parts[parts.length - 1]!);
+    if (last.size) return last;
+  }
+  return kvClasses(`${item.item} ${item.context}`);
+}
+
 export function buildIndex(catalog: RateCatalog): RateIndex {
   const items = catalog.items.filter((i) => i.rate !== null && i.rate > 0);
-  const toks = items.map((i) => new Set(tokens(`${i.item} ${i.context}`)));
+  const toks = items.map((i) => {
+    const t = new Set(tokens(`${i.item} ${i.context}`));
+    if (isSteelItem(i)) t.add(STEEL);
+    return t;
+  });
   const df = new Map<string, number>();
   for (const s of toks) for (const t of s) df.set(t, (df.get(t) ?? 0) + 1);
   const idf = new Map<string, number>();
   for (const [t, n] of df) idf.set(t, Math.log(1 + items.length / n));
   const norms = toks.map((s) => Math.sqrt([...s].reduce((sum, t) => sum + idf.get(t)! ** 2, 0)));
-  const hv = items.map((i) => highestKv(`${i.item} ${i.context}`));
+  const hv = items.map(itemKv);
   return { items, toks, idf, norms, hv };
 }
 
@@ -229,21 +297,63 @@ export function tonnesPerNo(line: Pick<EstimateLine, 'description' | 'unit' | 'q
 }
 
 /**
+ * Nos in one Set of an item's SoR labour and T&C, when the estimator has not said. The SoR marks CT and PT erection
+ * "[set/3]", and the 21 KPTCL estimates divide the Set rates of CTs, PTs/VTs and lightning arresters by 3 (single-phase
+ * units, three to a set) and take a Set of breakers, isolators, NCTs and panels as one No. 0 means "not added".
+ */
+export function usualSetNos(item: Pick<CatalogItem, 'item' | 'context' | 'labour' | 'tc'>): number {
+  if ([...item.labour, ...item.tc].some((c) => /set\s*\/\s*3\b/i.test(c.text))) return 3;
+  const text = `${item.context} ${item.item}`;
+  if (/\bneutral\b|\bnct\b/i.test(text)) return 1;
+  return /current\s+transformer|voltage\s+transformer|potential\s+transformer|\bcvt\b|surge\s+arr?est|lightn?ing\s+arr?est/i.test(text) ? 3 : 1;
+}
+
+/**
+ * Short child rates that are alternatives, not parts ("Fixing Number Plate" and "Fixing Circuit plate" under one item):
+ * when the line names exactly one of them, only that one applies.
+ */
+function alternativeFor(children: CatalogChildRate[], line: LineBasis & { description?: string }): CatalogChildRate[] {
+  if (children.length < 2 || !line.description || children.some((c) => c.text.length > 40)) return children;
+  const sets = children.map((c) => new Set(tokens(c.text)));
+  const common = new Set([...sets[0]!].filter((t) => sets.every((x) => x.has(t))));
+  const own = new Set(tokens(line.description));
+  const hits = children.filter((_, i) => [...sets[i]!].some((t) => !common.has(t) && own.has(t)));
+  return hits.length === 1 ? hits : children;
+}
+
+/** SoR labour that estimates leave out unless asked: sorting tower parts (KPTCL line estimates charge assembly and erection only). */
+const OPTIONAL_CHILD = /^\s*sorting\b/i;
+
+/** Weight of one No of a line: the estimator's figure, else the tonnage in its unit over the quantity. */
+const weightPerNo = (line: Pick<LineBasis, 'unit' | 'qty' | 'basis'> & { description?: string }): number | undefined => {
+  if (line.basis?.tonnes) return line.basis.tonnes;
+  if (line.description !== undefined) return tonnesPerNo({ description: line.description, unit: line.unit, qty: line.qty ?? 0 });
+  const total = tonnesOf(line.unit);
+  return total && line.qty && line.qty > 0 ? total / line.qty : undefined;
+};
+
+/**
  * Child rates that apply per unit of the line, and those that need another basis. A per-tonne rate is
  * turned into a rate per No when the line carries its tonnage ("No (6.907 MT)"), as KPTCL does for
  * structures and towers (erection Rs/MT × tonnes ÷ number).
  */
-function splitChildren(children: CatalogChildRate[], line: LineBasis, itemUnit: string) {
+function splitChildren(children: CatalogChildRate[], line: LineBasis, item: CatalogItem) {
   let sum = 0;
   const notApplied: CatalogChildRate[] = [];
   const converted: string[] = [];
   const lb = unitBasis(line.unit);
-  const ib = unitBasis(itemUnit);
-  const b = line.basis ?? {};
+  const ib = unitBasis(item.unit);
+  const b = { ...line.basis, setNos: line.basis?.setNos ?? usualSetNos(item) };
+  children = alternativeFor(children, line);
   const lineTonnes = tonnesOf(line.unit);
   const tonnes = b.tonnes ?? (lineTonnes && line.qty && line.qty > 0 ? lineTonnes / line.qty : undefined);
   for (const c of children) {
     const cb = unitBasis(c.unit);
+    // Sorting tower parts is not usually charged in KPTCL estimates: shown as not added, for the estimator to add.
+    if (OPTIONAL_CHILD.test(c.text)) {
+      notApplied.push(c);
+      continue;
+    }
     const f = lb !== 'other' && cb !== 'other' ? unitFactor(line.unit, c.unit) : null;
     if (lb !== 'other' && cb === lb) sum += c.rate;
     else if (f !== null && f !== 1) {
@@ -258,10 +368,11 @@ function splitChildren(children: CatalogChildRate[], line: LineBasis, itemUnit: 
     } else if (cb === 'weightDistance' && lb === 'no' && tonnes && b.metres) {
       sum += c.rate * tonnes * b.metres;
       converted.push(`${formatRate(c.rate)} per ${c.unit} × ${r3(tonnes)} t × ${b.metres} m = ${formatRate(r2(c.rate * tonnes * b.metres))} per No`);
-    } else if (isSetBasis(cb) && lb === 'no' && b.setNos) {
+    } else if (isSetBasis(cb) && lb === 'no' && (nosInSet(c.unit) ?? b.setNos)) {
+      const n = nosInSet(c.unit) ?? b.setNos!;
       // The estimator says how many Nos of the BOQ make one Set of the SoR.
-      sum += c.rate / b.setNos;
-      converted.push(`${formatRate(c.rate)} per ${c.unit} ÷ ${b.setNos} = ${formatRate(r2(c.rate / b.setNos))} per No`);
+      sum += c.rate / n;
+      converted.push(`${formatRate(c.rate)} per ${c.unit} ÷ ${n} = ${formatRate(r2(c.rate / n))} per No`);
     } else notApplied.push(c);
   }
   return { total: sum, notApplied, converted };
@@ -270,6 +381,7 @@ function splitChildren(children: CatalogChildRate[], line: LineBasis, itemUnit: 
 const formatRate = (n: number) => n.toLocaleString('en-IN', { maximumFractionDigits: 2 });
 
 const OPPOSITES: [string, string][] = [
+  ['doublebreak', 'singlebreak'],
   ['indoor', 'outdoor'],
   // Surge arrester duty: station medium (SM, class 3) against station low (SL, class 2).
   ['sm', 'sl'],
@@ -281,6 +393,7 @@ const OPPOSITES: [string, string][] = [
   ['ct', 'vt'],
   ['singlephase', 'threephase'],
   ['existing', 'new'],
+  ['suspension', 'tension'],
 ];
 const PART_WORDS = ['bolt', 'nut', 'washer'];
 /** Conductor names: hardware and joints are priced per conductor, so the line must name the same one. */
@@ -289,13 +402,49 @@ const CONDUCTORS = ['moose', 'coyote', 'drake', 'lynx', 'panther', 'zebra', 'ber
 /** The part of a BOQ description that names the item: notes and working ("Note:- For stringing 2nd circuit = …") are cut off. */
 export const itemText = (description: string) => description.split(/\bnote\s*[:-]|\bnotes?\s*\d\)/i)[0]!.trim() || description;
 
-export function suggestRates(index: RateIndex, line: LineBasis & Pick<EstimateLine, 'description'> & { group?: string }, max = 3): RateSuggestion[] {
-  const own = new Set(tokens(itemText(line.description)));
+/**
+ * What the whole estimate says about the work, for lines that leave it out: the one conductor it names ("Vibration
+ * dampers" in an HPC re-conductoring job are HPC dampers), stringing on existing towers, and a stated ampacity.
+ */
+export function jobContext(lines: Pick<EstimateLine, 'description'>[]): string[] {
+  const text = lines.map((l) => l.description).join(' \n ');
+  const toks = new Set(tokens(text));
+  const out: string[] = [];
+  const conductors = CONDUCTORS.filter((c) => toks.has(c));
+  if (conductors.length === 1) out.push(conductors[0]!);
+  if (/\bexisting\s+(?:towers?|supports?|line)\b|\bon\s+exis?ting\s+towers?/i.test(text)) out.push('existing');
+  const amps = new Set([...text.matchAll(/ampacity\D{0,6}(\d{3,4})\s*(?:a\b|amps?)/gi)].map((m) => `${m[1]}a`));
+  if (amps.size === 1) out.push(...amps);
+  return out;
+}
+
+export function suggestRates(index: RateIndex, line: LineBasis & Pick<EstimateLine, 'description'> & { group?: string; job?: string[] }, max = 3): RateSuggestion[] {
+  const steelLine = isSteelStructureLine(line);
+  // A structure "including bolts & nuts" is steel, not bolts. Only a heading such as "Supply of galvanised bolts, nuts
+  // and washers", or the "(contd.)" row of a structure, is for the bolts and nuts themselves.
+  const boltsRow = steelLine && /\(contd\.?\)/i.test(line.description) && /bolts?|nuts?/i.test(line.description);
+  const included = (t: string) => (steelLine && !boltsRow ? t.replace(INCLUDED_BOLTS, ' ') : t);
+  const own = new Set(tokens(included(itemText(line.description))));
+  if (steelLine) {
+    own.add(STEEL);
+    if (boltsRow) own.add('bolt').add('nut');
+  }
   // Words of the headings the line sits under ("Fabrication and supply of towers" over "a) Normal tower") help, at a lower weight.
-  const fromGroup = new Set(tokens(line.group ?? '').filter((t) => !own.has(t)));
-  const lt = [...own, ...fromGroup];
+  const boltsHeading = /\bsupply\s+of\s+(?:galvani[sz]ed\s+)?bolts?\b/i.test(line.group ?? '');
+  const fromGroup = new Set(tokens(included(line.group ?? '')).filter((t) => !own.has(t) && !(steelLine && !boltsHeading && BOLT_WORDS.includes(t))));
+  // Steel is mild steel unless the line says high tensile, or it is the bolts and nuts.
+  if (steelLine && !own.has('ht') && !own.has('bolt') && !fromGroup.has('bolt')) own.add('ms');
+  const fromJob = new Set((line.job ?? []).filter((t) => !own.has(t) && !fromGroup.has(t)));
+  // A line naming its own conductor needs none from the job.
+  if (CONDUCTORS.some((c) => own.has(c) || fromGroup.has(c))) for (const c of CONDUCTORS) fromJob.delete(c);
+  const lt = [...own, ...fromGroup, ...fromJob];
   if (!own.size) return [];
-  const weight = (t: string) => (index.idf.get(t) ?? Math.log(1 + index.items.length)) * (fromGroup.has(t) ? 0.6 : 1);
+  // A fragment ("For 66 kV transformer", "Upright mounting type…") only qualifies the item its heading names, so
+  // the heading counts in full.
+  const named = [...own].filter((t) => /^[a-z]{3,}$/.test(t) && t !== STEEL);
+  const fragment = fromGroup.size > 0 && (/^\s*(?:[a-z]{1,3}\)\s*)?for\b/i.test(line.description) || named.length <= 1);
+  const groupWeight = fragment ? 1 : 0.6;
+  const weight = (t: string) => (index.idf.get(t) ?? Math.log(1 + index.items.length)) * (fromGroup.has(t) ? groupWeight : fromJob.has(t) ? 0.5 : 1);
   const sizes = (set: Iterable<string>) => {
     const out = new Map<string, Set<string>>();
     for (const t of set) {
@@ -305,8 +454,10 @@ export function suggestRates(index: RateIndex, line: LineBasis & Pick<EstimateLi
     return out;
   };
   const lineSizes = sizes(own);
-  const lineHv = highestKv(line.description);
-  const lineNorm = Math.sqrt(lt.reduce((s, t) => s + weight(t) ** 2, 0));
+  const jobSizes = sizes(fromJob);
+  const lineHv = highestKv(line.description.replace(/\([^)]*\)/g, ' ')) ?? highestKv(line.description);
+  // Job words only add to a match; a line is not judged less like an item for words it never had.
+  const lineNorm = Math.sqrt(lt.reduce((s, t) => s + (fromJob.has(t) ? 0 : weight(t) ** 2), 0));
   const lu = unitKind(line.unit);
   const allowed = SHEETS[line.section];
   const scored: { i: number; score: number; shared: number }[] = [];
@@ -327,11 +478,13 @@ export function suggestRates(index: RateIndex, line: LineBasis & Pick<EstimateLi
     let score = Math.sqrt(coverage * cosine);
     const iu = unitKind(item.unit);
     // A line priced by weight or length (towers in MT, conductor in km) is never a counted item, and the reverse.
-    if (lu !== 'other' && iu !== 'other' && lu !== iu) score *= (lu === 'count') !== (iu === 'count') ? 0.5 : 0.7;
+    // A structure bought by weight is steel, not the equipment it carries ("66 kV isolator (0.532 t per structure)").
+    if (steelLine && !s.has(STEEL)) score *= 0.4;
+    const byWeight = lu === 'count' && iu === 'weight' && !!weightPerNo(line);
+    if (lu !== 'other' && iu !== 'other' && lu !== iu && !byWeight) score *= (lu === 'count') !== (iu === 'count') ? 0.5 : 0.7;
     // A different voltage class is a different item (a 66 kV transformer is not a 110 kV one).
-    const hv = lineHv;
-    const ihv = index.hv[i];
-    if (hv !== null && ihv !== null && hv !== ihv) score *= 0.6;
+    const ihv = index.hv[i]!;
+    if (lineHv !== null && ihv.size && !ihv.has(lineHv)) score *= 0.6;
     // A different size (12.5 MVA against 16/20 MVA, 1000 sq mm against 630) is a different item too.
     if (lineSizes.size) {
       const itemSizes = sizes(s);
@@ -355,6 +508,11 @@ export function suggestRates(index: RateIndex, line: LineBasis & Pick<EstimateLi
       if ((own.has(a) || fromGroup.has(a)) && ib && !ia) score *= 0.6;
       if ((own.has(b) || fromGroup.has(b)) && ia && !ib) score *= 0.6;
     }
+    // A rating the job names (an ampacity of 700 A) and the line leaves out: an item of another one fits less well.
+    for (const [unit, values] of jobSizes) {
+      const theirs = sizes(s).get(unit);
+      if (!lineSizes.has(unit) && theirs && ![...values].some((v) => theirs.has(v))) score *= 0.85;
+    }
     // A different CT ratio is a different CT.
     const lineRatios = [...own].filter((t) => t.startsWith('ratio'));
     if (lineRatios.length) {
@@ -368,6 +526,8 @@ export function suggestRates(index: RateIndex, line: LineBasis & Pick<EstimateLi
     for (const w of PART_WORDS) if (s.has(w) && !own.has(w) && !fromGroup.has(w)) score *= 0.6;
     // KPTCL works are priced from the KPTCL SR; the ESCOM 11 kV stock list is a fallback (0.75 tested best on 21 KPTCL workbooks).
     if (line.section !== 'civil' && /SR-CSR/i.test(item.sheet)) score *= 0.75;
+    // Station building services (rubber mats, fire extinguishers, lighting) are in the utilization schedule.
+    if (line.section === 'electrical' && item.sheet.startsWith('utilization')) score *= 0.75;
     scored.push({ i, score, shared });
   });
   scored.sort((a, b) => b.score - a.score);
@@ -375,15 +535,24 @@ export function suggestRates(index: RateIndex, line: LineBasis & Pick<EstimateLi
 }
 
 /** Rates a catalog item gives a BOQ line: supply, plus the labour and T&C rates that are in the line's unit. */
-export function suggestionFor(item: CatalogItem, line: LineBasis, score = 1, shared = 0): RateSuggestion {
+export function suggestionFor(item: CatalogItem, lineIn: LineBasis, score = 1, shared = 0): RateSuggestion {
+  // A BOQ row with no unit is taken to be in the item's unit (control cables in m, equipment in Nos).
+  const line = lineIn.unit.trim() ? lineIn : { ...lineIn, unit: item.unit };
   const multi = line.section === 'electrical' || line.section === 'line';
-  const labour = splitChildren(item.labour, line, item.unit);
-  const tc = splitChildren(item.tc, line, item.unit);
+  const labour = splitChildren(item.labour, line, item);
+  const tc = splitChildren(item.tc, line, item);
   const lb = unitBasis(line.unit);
   const ib = unitBasis(item.unit);
-  const setNos = line.basis?.setNos;
+  const setNos = line.basis?.setNos ?? nosInSet(item.unit) ?? usualSetNos(item);
   // A supply rate per Set on a line in Nos, once the estimator has said how many Nos a Set is.
-  const f = lb === 'no' && isSetBasis(ib) && setNos ? 1 / setNos : unitFactor(line.unit, item.unit);
+  let f = lb === 'no' && isSetBasis(ib) && setNos ? 1 / setNos : unitFactor(line.unit, item.unit);
+  // Steel per tonne on a structure counted in Nos ("No (0.532 MT)"): the rate per tonne × the weight of one No.
+  const tonnes = lb === 'no' && (ib === 'weight' || ib === 'kg') ? weightPerNo(line) : undefined;
+  const supplyNote: string[] = [];
+  if (tonnes && f === null) {
+    f = (ib === 'kg' ? 1000 : 1) * tonnes;
+    supplyNote.push(`Supply ${formatRate(item.rate ?? 0)} per ${item.unit} × ${r3(tonnes)} t = ${formatRate(r2((item.rate ?? 0) * f))} per No`);
+  }
   return {
     item,
     score,
@@ -392,7 +561,7 @@ export function suggestionFor(item: CatalogItem, line: LineBasis, score = 1, sha
     erectionRate: multi ? labour.total : 0,
     testingRate: multi ? tc.total : 0,
     notApplied: multi ? [...labour.notApplied, ...tc.notApplied] : [],
-    converted: multi ? [...labour.converted, ...tc.converted] : [],
+    converted: [...supplyNote, ...(multi ? [...labour.converted, ...tc.converted] : [])],
     unitMatches: lb === 'other' || ib === 'other' || lb === ib || f !== null,
   };
 }
@@ -432,12 +601,40 @@ export function applySuggestion(line: EstimateLine, s: RateSuggestion): { line: 
 export const isLabourOnly = (description: string) =>
   /^\s*(testing|test\b|check survey|excavation|jelly|releas|re-?\s*erect|dismantl|integration of)|re-?\s*erection|released and|releasing and|re-?stringing|stub templates/i.test(description);
 
+/**
+ * Below this score the best match is a guess, not a match: on 21 KPTCL estimates, 140 of the 183 lines scoring under it
+ * have no item at their rate anywhere in SoR 76 (mostly KPWD civil work), and only 5 of them were matched right.
+ */
+export const WEAK_SCORE = 0.15;
+/** The line's best suggestion is too weak to show as a match: the SoR probably does not list the item. */
+export const isWeakMatch = (s: RateSuggestion | undefined) => !s || (!s.exact && !s.remembered && s.score < WEAK_SCORE);
+
 /** A match close enough to tick for the user: very close wording, every number in the BOQ line also in the item, same unit. */
 export const RELIABLE_SCORE = 0.85;
 const numbersOf = (t: string) => t.toLowerCase().match(/\d+(?:\.\d+)?/g) ?? [];
-export function isReliable(line: Pick<EstimateLine, 'description'> & { group?: string }, s: RateSuggestion): boolean {
+/**
+ * A looser wording score is enough when the next suggestion is well behind and any rating the line names
+ * (12.5 MVA, 4C x 95 sq mm, 1250 A) is in the item too. Tested on 21 KPTCL estimates: 121 lines trusted in all,
+ * 118 at exactly the workbook's rate; the other three are the right SoR item where the workbook used another rate
+ * (Telagi's 12.5 MVA transformer, and isolators of 4250 mm live point height priced as the 4600 mm ones).
+ */
+export const RATED_SCORE = 0.6;
+export const RATED_GAP = 0.2;
+const RATING_TOKEN = /^(\d+(?:\.\d+)?)(mva|sqmm|a|kn|ah|core)$/;
+function ratedEnough(line: Pick<EstimateLine, 'description'>, s: RateSuggestion, next?: RateSuggestion | null): boolean {
+  if (s.score < RATED_SCORE || (next && s.score - next.score < RATED_GAP)) return false;
+  const ratings = tokens(line.description).filter((t) => RATING_TOKEN.test(t));
+  // A clear lead is enough on its own (tested on 21 KPTCL estimates: 15 more lines trusted, all at the workbook's rate),
+  // but a rating the line names must be in the item.
+  if (!ratings.length) return true;
+  const item = new Set(tokens(`${s.item.item} ${s.item.context}`));
+  return ratings.every((t) => item.has(t));
+}
+
+/** `next` is the runner-up suggestion, when there is one: a clear lead lets a rated line be trusted on a looser score. */
+export function isReliable(line: Pick<EstimateLine, 'description'> & { group?: string }, s: RateSuggestion, next?: RateSuggestion | null): boolean {
   // A fragment such as "For 66kV Line" (the item's name sits in a heading above it) says too little to trust.
-  if (s.score < RELIABLE_SCORE || !s.unitMatches || isLabourOnly(line.description) || new Set(tokens(line.description)).size < 4) return false;
+  if ((s.score < RELIABLE_SCORE && (next === undefined || !ratedEnough(line, s, next))) || !s.unitMatches || isLabourOnly(line.description) || new Set(tokens(line.description)).size < 4) return false;
   // An item for one conductor (Moose) is only trusted when the line or its heading names that conductor.
   const itemToks = new Set(tokens(`${s.item.item} ${s.item.context}`));
   const lineToks = new Set(tokens(`${line.description} ${line.group ?? ''}`));
@@ -537,8 +734,8 @@ export function ratingDifferences(line: Pick<EstimateLine, 'description'>, item:
   const out: string[] = [];
   const itemText = `${item.item} ${item.context}`;
   const lkv = highestKv(line.description);
-  const ikv = highestKv(itemText);
-  if (lkv !== null && ikv !== null && lkv !== ikv) out.push(`${ikv} kV, not ${lkv} kV`);
+  const ikv = itemKv(item);
+  if (lkv !== null && ikv.size && !ikv.has(lkv)) out.push(`${Math.max(...ikv)} kV, not ${lkv} kV`);
   const sizes = (t: string) => {
     const m = new Map<string, Set<string>>();
     for (const tok of tokens(t)) {
@@ -552,6 +749,35 @@ export function ratingDifferences(line: Pick<EstimateLine, 'description'>, item:
   for (const [unit, values] of sizes(line.description)) {
     const t = theirs.get(unit);
     if (t && ![...values].some((v) => t.has(v))) out.push(`${[...t].join('/')} ${NAMES[unit] ?? unit}, not ${[...values].join('/')} ${NAMES[unit] ?? unit}`);
+  }
+  return out;
+}
+
+/** The SoR item a line surely is: its own SR code, or a match by wording close enough to trust. */
+export function certainMatch(index: RateIndex, line: LineBasis & Pick<EstimateLine, 'description' | 'srCode'> & { group?: string }): RateSuggestion | null {
+  const exact = exactCodeMatch(index, line);
+  if (exact) return exact;
+  if (isLabourOnly(line.description)) return null;
+  const [top, next] = suggestRates(index, line, 2);
+  return top && isReliable(line, top, next ?? null) ? top : null;
+}
+
+/** Supply rates further than this from the SoR count as different (0.5%, so rounding never trips it). */
+const SAME_RATE = 0.005;
+export const differsFromRate = (sor: number, rate: number) => Math.abs(sor - rate) > Math.max(1, SAME_RATE * Math.max(sor, rate));
+
+export interface SorDifference {
+  line: EstimateLine;
+  match: RateSuggestion;
+}
+
+/** Priced lines whose supply rate is not the rate of the SoR item they surely are (rate_catalog is the rate source). */
+export function sorDifferences(index: RateIndex, lines: EstimateLine[]): SorDifference[] {
+  const out: SorDifference[] = [];
+  for (const line of lines) {
+    if (!(line.supplyRate > 0)) continue;
+    const match = certainMatch(index, line);
+    if (match && match.supplyRate > 0 && differsFromRate(match.supplyRate, line.supplyRate)) out.push({ line, match });
   }
   return out;
 }
