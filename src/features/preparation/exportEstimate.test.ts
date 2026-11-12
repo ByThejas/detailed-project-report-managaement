@@ -61,6 +61,22 @@ describe('formula-driven estimate workbook', () => {
     if (process.env.EXPORT_OUT) writeFileSync(process.env.EXPORT_OUT, Buffer.from(await wb.xlsx.writeBuffer()));
   });
 
+  it('leaves out items with no quantity and shows zeros as blank cells', async () => {
+    const e = estimate();
+    e.lines = [line('electrical', 1, 2, 31_247_000, 150_000, 0), line('electrical', 2, 0, 12_345, 1_111, 222), ...e.lines.filter((l) => l.section !== 'electrical')];
+    const wb = await buildEstimateWorkbook(dpr, e);
+    const a = wb.getWorksheet('Part A Electrical')!;
+    const texts: unknown[] = [];
+    a.eachRow((r) => texts.push(r.getCell(2).value));
+    expect(texts).toContain('20 MVA power transformer');
+    expect(texts).not.toContain('electrical item 2');
+    const item = a.getRow(6);
+    expect(item.getCell(9).value).toBeNull(); // T&C rate 0
+    expect(item.getCell(10).value).toMatchObject({ formula: 'ROUND($D6*I6,2)' });
+    expect(item.getCell(10).numFmt).toBe('#,##0.00;-#,##0.00;');
+    expect(item.getCell(5).value).toBe(31_247_000);
+  });
+
   it('writes the BCR in the KPTCL BCR calculator layout, linked to the general abstract', async () => {
     const e = estimate();
     const inputs = { ...DEFAULT_BCR_INPUTS, addedMva: 20, salePrice: 8.96, transmissionCharge: 0.79, loadGrowthPct: 8, discountRatePct: 9 };

@@ -44,6 +44,23 @@ interface ItemSheetSpec {
 const col = (n: number) => String.fromCharCode(64 + n);
 
 /**
+ * Zeros show as blank cells: a plain 0 is left empty, and a formula that comes to 0 keeps its formula
+ * but uses a number format whose zero section is empty.
+ */
+function blankZeros(ws: Worksheet) {
+  ws.eachRow((r) =>
+    r.eachCell((c) => {
+      const v = c.value;
+      if (v === 0) c.value = null;
+      else if (v && typeof v === 'object' && 'formula' in v) {
+        const fmt = c.numFmt || '#,##0.00';
+        if (fmt.split(';').length === 1) c.numFmt = `${fmt};-${fmt};`;
+      }
+    }),
+  );
+}
+
+/**
  * Writes one BOQ sheet: qty and rates are the inputs, each amount is =ROUND(qty*rate,2), the sub total sums the
  * amounts, "Miscellaneous" is an input, and the total is sub total + miscellaneous. Returns the total cells.
  */
@@ -63,14 +80,15 @@ function itemSheet(wb: Workbook, e: Estimate, spec: ItemSheetSpec, notes: string
   });
   ws.views = [{ state: 'frozen', ySplit: header.number }];
 
-  const lines = e.lines.filter((l) => l.section === spec.section);
+  // Items with no quantity are left out of the download.
+  const lines = e.lines.filter((l) => l.section === spec.section && (l.qty || 0) !== 0);
   for (const l of lines) {
     const a = lineAmounts(l);
     const row = ws.addRow([l.code, l.description, l.unit, l.qty]);
     const r = row.number;
     spec.cols.forEach((c, i) => {
       const rc = 5 + i * 2;
-      row.getCell(rc).value = l[c.rateOf];
+      row.getCell(rc).value = l[c.rateOf] || null;
       row.getCell(rc + 1).value = f(`ROUND($D${r}*${col(rc)}${r},2)`, a[c.amountOf]);
       row.getCell(rc).fill = INPUT_FILL;
       row.getCell(rc).numFmt = RS;
@@ -261,6 +279,8 @@ export async function buildEstimateWorkbook(dpr: DprRow, e: Estimate): Promise<W
   gt.font = { bold: true };
   gt.getCell(3).numFmt = LAKHS;
   const projectCost: Ref = { sheet: 'General Abstract', cell: `C${gt.number}` };
+  // The estimate sheets show zeros as blank cells; the cost-benefit sheets keep theirs (year 0, nil flows).
+  wb.eachSheet((ws) => blankZeros(ws));
 
   const fin = e.financials ?? DEFAULT_FINANCIALS;
   // Pure line works carry no BCR (ADR-0007).
