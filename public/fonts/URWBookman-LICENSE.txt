@@ -1,0 +1,14 @@
+The font and related files in this directory are distributed under the
+GNU AFFERO GENERAL PUBLIC LICENSE Version 3 (see the file COPYING), with
+the following exemption:
+
+As a special exception, permission is granted to include these font
+programs in a Postscript or PDF file that consists of a document that
+contains text to be displayed or printed using this font, regardless
+of the conditions or license applying to the document itself.
+
+
+----
+URW Bookman Light and Demi (URW++ base 35 fonts, from the urw-core35-fonts package, converted from WOFF2 to
+TTF and cut down to Latin characters, without hinting, so the app loads ~65 kB instead of 400 kB). Same character widths as Bookman Old Style, which KPTCL's estimates are printed in.
+The full AGPL-3.0 text: https://www.gnu.org/licenses/agpl-3.0.txt

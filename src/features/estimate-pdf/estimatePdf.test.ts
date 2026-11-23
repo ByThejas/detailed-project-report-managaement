@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import * as pdf from 'pdf-lib';
 import { row } from '@/test/fixtures';
 import { buildEstimateWorkbook } from '@/features/preparation/exportEstimate';
@@ -5,8 +6,11 @@ import { buildTemplate } from '@/features/preparation/template';
 import type { Estimate, EstimateLine, EstimateSection } from '@/features/preparation/types';
 import { DEFAULT_PDF_SETTINGS, withDefaults } from './format';
 import { approxMeasure, layout, pageKey, wrap } from './layout';
-import { renderPdf } from './renderPdf';
+import { loadFonts, renderPdf, setFontBytes } from './renderPdf';
 import { printable, sheetsFromWorkbook } from './sheets';
+
+const font = (f: string) => new Uint8Array(readFileSync(`public/fonts/${f}`));
+setFontBytes({ regular: font('URWBookman-Light.ttf'), bold: font('URWBookman-Demi.ttf') });
 
 const dpr = row({ voltage: '66 kV', capacity: '2x20 MVA', stream: 'Brownfield' });
 const line = (section: EstimateSection, i: number, qty: number, s: number, er = 0): EstimateLine => ({
@@ -45,7 +49,7 @@ describe('Abstract & Estimate PDF', () => {
 
   it('pages long sheets, repeats the headings and numbers every page', async () => {
     const many = Array.from({ length: 120 }, (_, i) => line('electrical', i + 10, 1, 100));
-    const pages = layout(await sheetsOf(estimate(many)), DEFAULT_PDF_SETTINGS, approxMeasure);
+    const pages = layout(await sheetsOf(estimate(many)), withDefaults({ pageNumbers: true }), approxMeasure);
     const partA = pages.filter((p) => p.sheet === 'Part A Electrical');
     expect(partA.length).toBeGreaterThan(1);
     for (const p of partA) expect(p.table!.rows[0]!.index).toBe(-1);
@@ -83,7 +87,7 @@ describe('Abstract & Estimate PDF', () => {
     expect(bySheet.slice(0, 2).map((p) => p.sheet)).toEqual(['Part B Civil', 'General Abstract']);
     const natural = layout(sheets, DEFAULT_PDF_SETTINGS, approxMeasure).map(pageKey);
     const order = [natural[2]!, ...natural.filter((_, i) => i !== 2)];
-    const moved = layout(sheets, withDefaults({ pageOrder: order }), approxMeasure);
+    const moved = layout(sheets, withDefaults({ pageOrder: order, pageNumbers: true }), approxMeasure);
     expect(moved.map(pageKey)).toEqual(order);
     expect(moved[0]!.ops.some((o) => o.kind === 'text' && o.text === `Page 1 of ${moved.length}`)).toBe(true);
     // A page the saved order does not know (the sheet grew) stays after the page before it.
@@ -102,6 +106,50 @@ describe('Abstract & Estimate PDF', () => {
     const bytes = await renderPdf(pages, 'test');
     const doc = await pdf.PDFDocument.load(bytes);
     expect(doc.getPageCount()).toBe(pages.length);
+  });
+
+  it('prints in KPTCL’s format: Letter landscape, boxed letterhead, project and title, grouped headings', async () => {
+    const pages = layout(await sheetsOf(estimate()), DEFAULT_PDF_SETTINGS, await loadFonts());
+    const a = pages.find((p) => p.sheet === 'Part A Electrical')!;
+    expect([a.w, a.h]).toEqual([792, 612]);
+    const texts = a.ops.flatMap((o) => (o.kind === 'text' ? [o] : []));
+    const find = (t: string) => texts.find((o) => o.text === t)!;
+    expect(find('KARNATAKA POWER TRANSMISSION CORPORATION LIMITED')).toMatchObject({ size: 10.1, bold: true });
+    expect(find('Supply of station materials, erection and commissioning')).toMatchObject({ size: 7.81, bold: true });
+    // The project name without the app's id.
+    expect(texts.some((o) => o.size === 9.02 && o.text.includes('(') )).toBe(false);
+    for (const t of ['Supply of Material', 'Erection charges', 'Testing and Commissioning', 'Sl No.', 'Quantity', 'Name of the Equipment/Materials']) expect(find(t)).toMatchObject({ size: 6.73, bold: true });
+    expect(texts.filter((o) => o.text === '(in Rs.)')).toHaveLength(6);
+    expect(find('Grand Total')).toMatchObject({ bold: true });
+    expect(find('Miscellaneous and other unforeseen materials')).toMatchObject({ bold: true });
+    // The standard column widths: Sl No 25.32, Unit 27.36, Quantity 37.56, then the rate and amount pairs.
+    const xs = a.table!.xs;
+    const w = xs.slice(1).map((x, i) => Math.round((x - xs[i]!) * 100) / 100);
+    expect([w[0], ...w.slice(2)]).toEqual([25.32, 27.36, 37.56, 62.52, 69.12, 50.88, 59.28, 50.88, 52.56]);
+    expect(a.ops.every((o) => o.kind !== 'line' || o.width === 0.48)).toBe(true);
+    // No line between a group's rate and amount columns inside the group heading row.
+    const header = a.table!.rows[0]!;
+    const inner = a.ops.filter((o) => o.kind === 'line' && o.x1 === o.x2 && o.x1 === xs[5]);
+    expect(inner.every((o) => o.kind === 'line' && Math.min(o.y1, o.y2) > header.y + 1)).toBe(true);
+    expect(texts.some((o) => /^Page \d/.test(o.text))).toBe(false);
+  });
+
+  it('keeps the user’s text and sheet choices from the first format, and resets the look', () => {
+    const s = withDefaults({ version: 1, titleSize: 11, bodySize: 8.5, sheets: { 'Part B Civil': { include: false, colWeights: [1, 2], title: 'Civil' } } } as never);
+    expect(s.bodySize).toBe(6.73);
+    expect(s.sheets['Part B Civil']).toMatchObject({ include: false, title: 'Civil' });
+    expect(s.sheets['Part B Civil']!.colWeights).toBeUndefined();
+  });
+
+  it('embeds the Bookman fonts in the PDF', async () => {
+    const measure = await loadFonts();
+    // Bookman Old Style widths: "Supply" at 7.81 pt is 27.90 pt wide on KPTCL's sheet.
+    expect(measure('Supply', 7.81, true)).toBeCloseTo(27.9, 0);
+    const bytes = await renderPdf(layout(await sheetsOf(estimate()), DEFAULT_PDF_SETTINGS, measure), 'test');
+    const doc = await pdf.PDFDocument.load(bytes);
+    const text = doc.context.enumerateIndirectObjects().map(([, o]) => (o instanceof pdf.PDFDict ? o.toString() : '')).join('\n');
+    expect(text).toMatch(/URWBookman-Light/);
+    expect(text).toMatch(/URWBookman-Demi/);
   });
 
   it('replaces characters the PDF fonts cannot print', () => {

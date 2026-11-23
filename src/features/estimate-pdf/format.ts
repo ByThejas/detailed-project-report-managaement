@@ -1,18 +1,21 @@
 /**
- * The PDF format for the Abstract & Estimate. This is a placeholder in the KPTCL style until the
- * department's standard format is supplied: swap the defaults here (letterhead, fonts, borders,
- * signatures) and every user who has not changed a setting gets the new format.
+ * The PDF format for the Abstract & Estimate, measured from KPTCL's printed estimate (the Gowdagere 2x20 MVA
+ * station material estimate, 23 Nov 2026): Bookman Old Style on a US Letter page, the letterhead, project and
+ * sheet title in three boxed rows, two-level column headings ("Supply of Material" over "Unit Rate / Amount"),
+ * 6.73 pt table text on 8.76 pt rows and a 0.48 pt grid. Every user who has not changed a setting gets this
+ * format; the editor changes it per DPR.
  */
 
 export type BorderStyle = 'grid' | 'rows' | 'outer' | 'none';
 export type Orientation = 'portrait' | 'landscape';
+export type Paper = 'letter' | 'a4';
 
 export interface SheetSettings {
   include?: boolean;
   orientation?: Orientation;
-  /** Title printed above the table, in place of the Excel's. */
+  /** Title printed above the table, in place of the standard one. */
   title?: string;
-  /** Relative column widths, one per column; missing means the Excel's widths. */
+  /** Relative column widths, one per column; missing means the standard widths. */
   colWeights?: number[];
   /** Fixed row heights in points, by row index (-1 is the header row). */
   rowHeights?: Record<string, number>;
@@ -25,16 +28,25 @@ export interface SheetSettings {
 }
 
 export interface PdfSettings {
-  version: 1;
-  /** Letterhead lines on the first page of each sheet. */
+  version: 2;
+  paper: Paper;
+  /** Letterhead lines on the first page of each sheet, each in its own boxed row. */
   letterhead: string[];
+  /** The project name row under the letterhead. */
   showNotes: boolean;
+  /** Left and right margin. */
   marginMm: number;
+  topMm: number;
+  bottomMm: number;
+  letterheadSize: number;
+  projectSize: number;
+  /** The sheet title row ("Supply of station materials, erection and commissioning"). */
   titleSize: number;
   headerSize: number;
   bodySize: number;
   /** Line spacing as a multiple of the font size. */
   lineSpacing: number;
+  /** Space between the text and the left and right cell borders. */
   cellPadding: number;
   minRowHeight: number;
   borders: BorderStyle;
@@ -42,6 +54,8 @@ export interface PdfSettings {
   outerLine: number;
   headerFill: boolean;
   repeatHeader: boolean;
+  /** Paragraphs in the description column are justified, as in KPTCL's estimates. */
+  justify: boolean;
   pageNumbers: boolean;
   /** Signature titles printed under each abstract; empty for none. */
   signatures: string[];
@@ -53,37 +67,148 @@ export interface PdfSettings {
 }
 
 export const DEFAULT_PDF_SETTINGS: PdfSettings = {
-  version: 1,
+  version: 2,
+  paper: 'letter',
   letterhead: ['KARNATAKA POWER TRANSMISSION CORPORATION LIMITED'],
   showNotes: true,
-  marginMm: 12,
-  titleSize: 11,
-  headerSize: 8.5,
-  bodySize: 8.5,
-  lineSpacing: 1.25,
-  cellPadding: 3,
-  minRowHeight: 14,
+  marginMm: 7.43,
+  topMm: 5.08,
+  bottomMm: 19.05,
+  letterheadSize: 10.1,
+  projectSize: 9.02,
+  titleSize: 7.81,
+  headerSize: 6.73,
+  bodySize: 6.73,
+  lineSpacing: 1.3,
+  cellPadding: 1.8,
+  minRowHeight: 8.76,
   borders: 'grid',
-  innerLine: 0.5,
-  outerLine: 1,
-  headerFill: true,
+  innerLine: 0.48,
+  outerLine: 0.48,
+  headerFill: false,
   repeatHeader: true,
-  pageNumbers: true,
+  justify: true,
+  pageNumbers: false,
   signatures: ['Assistant Engineer', 'Assistant Executive Engineer', 'Executive Engineer'],
   sheets: {},
 };
 
-/** A4 in points. */
-export const A4 = { w: 595.28, h: 841.89 };
+/** Page sizes in points, portrait. */
+export const PAPER: Record<Paper, { w: number; h: number; label: string }> = {
+  letter: { w: 612, h: 792, label: 'Letter' },
+  a4: { w: 595.28, h: 841.89, label: 'A4' },
+};
 export const MM = 72 / 25.4;
 
 /** Sheets with many amount columns read better across the page. */
 export const defaultOrientation = (columns: number): Orientation => (columns > 5 ? 'landscape' : 'portrait');
 
-/** Settings saved by an older version keep working: anything missing comes from the defaults. */
-export function withDefaults(s: Partial<PdfSettings> | null | undefined): PdfSettings {
-  return { ...DEFAULT_PDF_SETTINGS, ...(s ?? {}), sheets: { ...(s?.sheets ?? {}) } };
+/**
+ * Settings saved by an older version keep working: anything missing comes from the defaults. Settings from the
+ * first (placeholder) format keep only the user's own text, sheet choices and order, so the KPTCL format applies.
+ */
+export function withDefaults(s: Partial<PdfSettings> | { version?: number } | null | undefined): PdfSettings {
+  const saved = (s ?? {}) as Omit<Partial<PdfSettings>, 'version'> & { version?: number };
+  if (saved.version === 1) {
+    const sheets: Record<string, SheetSettings> = {};
+    for (const [k, v] of Object.entries(saved.sheets ?? {})) {
+      const { include, title, cells, note, bold } = v ?? {};
+      sheets[k] = { include, title, cells, note, bold };
+    }
+    return { ...DEFAULT_PDF_SETTINGS, sheets, sheetOrder: saved.sheetOrder, pageOrder: saved.pageOrder, signatures: saved.signatures ?? DEFAULT_PDF_SETTINGS.signatures };
+  }
+  return { ...DEFAULT_PDF_SETTINGS, ...saved, version: 2, sheets: { ...(saved.sheets ?? {}) } };
 }
 
 /** Signatures go under the abstracts, where KPTCL's estimates carry them. */
 export const isAbstract = (key: string) => /abstract/i.test(key);
+
+/** The sheet titles KPTCL prints, by worksheet name; other sheets keep the Excel's title. */
+export const SHEET_TITLES: Record<string, string> = {
+  'General Abstract': 'General Abstract (Rs. in lakhs)',
+  'Abstract-I': 'Abstract - I (Rs. in lakhs)',
+  'Part A Electrical': 'Supply of station materials, erection and commissioning',
+  'Part B Civil': 'Civil works',
+  'Line Abstract': 'Abstract for line works (Rs. in lakhs)',
+  'Line Supply': 'Supply of line materials, erection and commissioning',
+  'Line Civil': 'Civil works for the line',
+  'Abstract-II': 'Abstract - II: Dismantling (Rs. in lakhs)',
+  Dismantling: 'Dismantling works',
+};
+
+export interface Heading {
+  text: string;
+  /** Spanning heading printed above this and the neighbouring columns with the same group. */
+  group?: string;
+}
+
+const RATE = 'Unit Rate\n(in Rs.)';
+const AMOUNT = 'Amount\n(in Rs.)';
+/** The Excel's column headings, keyed in lower case, as KPTCL words them. */
+const HEADINGS: Record<string, Heading> = {
+  'sl. no.': { text: 'Sl No.' },
+  'name of the equipment / materials': { text: 'Name of the Equipment/Materials' },
+  qty: { text: 'Quantity' },
+  'supply unit price': { text: RATE, group: 'Supply of Material' },
+  'supply total': { text: AMOUNT, group: 'Supply of Material' },
+  'material unit rate': { text: RATE, group: 'Supply of Material' },
+  'material amount': { text: AMOUNT, group: 'Supply of Material' },
+  'erection unit rate': { text: RATE, group: 'Erection charges' },
+  'erection amount': { text: AMOUNT, group: 'Erection charges' },
+  'labour unit rate': { text: RATE, group: 'Erection charges' },
+  'labour amount': { text: AMOUNT, group: 'Erection charges' },
+  't&c unit rate': { text: RATE, group: 'Testing and Commissioning' },
+  't&c amount': { text: AMOUNT, group: 'Testing and Commissioning' },
+  'basic rate': { text: RATE },
+  rate: { text: RATE },
+  amount: { text: AMOUNT },
+  'amount (rs. lakhs)': { text: 'Amount\n(Rs. in lakhs)' },
+};
+
+export const heading = (excel: string): Heading => HEADINGS[excel.trim().toLowerCase()] ?? { text: excel };
+
+/** Labels of the closing rows of a BOQ sheet, as KPTCL words them. */
+const TOTAL_LABELS: Record<string, string> = {
+  'sub total': 'Sub Total',
+  'miscellaneous and unforeseen': 'Miscellaneous and other unforeseen materials',
+  miscellaneous: 'Miscellaneous and other unforeseen materials',
+  total: 'Grand Total',
+  'total amount': 'Grand Total',
+};
+export const totalLabel = (excel: string) => TOTAL_LABELS[excel.trim().toLowerCase()] ?? excel;
+
+/** The project row: the DPR's name without the app's id in brackets. */
+export const projectLine = (note: string) => note.replace(/\s*\([^()\s]+\)\s*$/, '').trim();
+
+export type ColumnRole = 'sl' | 'desc' | 'unit' | 'qty' | 'money';
+
+export function columnRole(excelHeader: string, index: number): ColumnRole {
+  const h = excelHeader.trim().toLowerCase();
+  if (index === 0) return 'sl';
+  if (h === 'unit') return 'unit';
+  if (/^(qty|quantity)/.test(h)) return 'qty';
+  if (index === 1) return 'desc';
+  return 'money';
+}
+
+/** Column widths in points on KPTCL's sheet: Sl No, Unit, Quantity and each rate/amount pair; the description takes the rest. */
+const FIXED: Record<Exclude<ColumnRole, 'desc' | 'money'>, number> = { sl: 25.32, unit: 27.36, qty: 37.56 };
+const MONEY = [62.52, 69.12, 50.88, 59.28, 50.88, 52.56];
+
+/** Standard widths for a sheet's columns in points, scaled down if the table is narrower than they need. */
+export function standardWidths(headers: string[], tableWidth: number): number[] {
+  let money = 0;
+  const roles = headers.map(columnRole);
+  // An abstract's single amount column gets the width of an amount column.
+  const singleMoney = roles.filter((r) => r === 'money').length === 1;
+  const w = roles.map((r) => (r === 'desc' ? 0 : r === 'money' ? (singleMoney ? MONEY[1]! : MONEY[money++] ?? 60) : FIXED[r]));
+  const fixed = w.reduce((a, b) => a + b, 0);
+  const di = roles.indexOf('desc');
+  if (di >= 0 && fixed < tableWidth * 0.8) {
+    w[di] = tableWidth - fixed;
+    return w;
+  }
+  if (di >= 0) w[di] = tableWidth * 0.3;
+  const sum = w.reduce((a, b) => a + b, 0);
+  return w.map((x) => (x / sum) * tableWidth);
+}

@@ -16,7 +16,7 @@ export function EstimatePdfCard({ dpr, estimate, open: openProp, onOpenChange }:
       <CardHeader
         id="estimate-pdf-title"
         title="Abstract & Estimate"
-        subtitle="The general abstract, abstracts and BOQ sheets from the Excel download as a standard A4 PDF. Adjust lines, text size, borders, rows and columns before downloading."
+        subtitle="The general abstract, abstracts and BOQ sheets from the Excel download in KPTCL’s printed estimate format (Bookman, boxed headings, Letter landscape). Adjust lines, text size, borders, rows and columns before downloading."
         action={
           <button type="button" className="btn-primary" onClick={() => setOpen(true)} disabled={!items}>
             <FileDown className="h-3.5 w-3.5" aria-hidden />

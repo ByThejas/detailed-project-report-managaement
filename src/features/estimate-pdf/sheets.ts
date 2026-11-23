@@ -12,6 +12,8 @@ export interface PdfColumn {
 export interface PdfRow {
   cells: string[];
   bold: boolean;
+  /** A closing row of a BOQ sheet (sub total, miscellaneous, total): a label with no code or quantity. */
+  total?: boolean;
 }
 
 /** One estimate or abstract sheet, reduced to what the PDF prints. */
@@ -129,7 +131,8 @@ export function sheetFromWorksheet(ws: Worksheet): PdfSheet | null {
         if (isNumeric(c)) numericCount[i]!++;
       }
     });
-    rows.push({ cells: texts, bold: cells.some((c) => c.font?.bold) || !!row.font?.bold });
+    const total = qtyCol > 0 && !texts[0] && !texts[qtyCol] && !!texts[1];
+    rows.push({ cells: texts, bold: cells.some((c) => c.font?.bold) || !!row.font?.bold, ...(total ? { total } : {}) });
   }
 
   const columns: PdfColumn[] = headers.map((h, i) => ({

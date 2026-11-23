@@ -5,9 +5,9 @@ import { useToast } from '@/lib/toast';
 import { buildEstimateWorkbook } from '@/features/preparation/exportEstimate';
 import type { Estimate } from '@/features/preparation/types';
 import type { DprRow } from '@/features/reports/types';
-import { DEFAULT_PDF_SETTINGS, defaultOrientation, withDefaults, type BorderStyle, type Orientation, type PdfSettings, type SheetSettings } from './format';
+import { DEFAULT_PDF_SETTINGS, PAPER, SHEET_TITLES, defaultOrientation, heading, projectLine, withDefaults, type BorderStyle, type Orientation, type Paper, type PdfSettings, type SheetSettings } from './format';
 import { approxMeasure, columnWidths, layout, orderSheets, pageKey, sheetSettings, type Measure, type Page } from './layout';
-import { downloadPdf, loadFonts } from './renderPdf';
+import { FONT_FILES, PREVIEW_FONT, downloadPdf, loadFonts } from './renderPdf';
 import { sheetsFromFile, sheetsFromWorkbook, type PdfSheet } from './sheets';
 
 /** A row (with the clicked cell's column) or a column heading. */
@@ -17,6 +17,11 @@ const CELL_EDITOR = 'pdf-cell-text';
 const focusCellEditor = () => requestAnimationFrame(() => document.getElementById(CELL_EDITOR)?.focus());
 
 const settingsKey = (dprId: string) => `dpr-estimate-pdf:${dprId}`;
+
+/** The preview draws with the same font files as the PDF. */
+const fontUrl = (f: string) => `${import.meta.env.BASE_URL ?? '/'}${f}`;
+const PREVIEW_FONT_FACES = `@font-face{font-family:'${PREVIEW_FONT}';src:url('${fontUrl(FONT_FILES.regular)}') format('truetype');font-weight:400}
+@font-face{font-family:'${PREVIEW_FONT}';src:url('${fontUrl(FONT_FILES.bold)}') format('truetype');font-weight:700}`;
 
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
@@ -133,7 +138,7 @@ function PageView({
         op.kind === 'line' ? (
           <line key={i} x1={op.x1} y1={op.y1} x2={op.x2} y2={op.y2} stroke="#000" strokeWidth={op.width} />
         ) : op.kind === 'text' ? (
-          <text key={i} x={op.x} y={op.y} fontSize={op.size} fontWeight={op.bold ? 700 : 400} fontFamily="Helvetica, Arial, sans-serif" xmlSpace="preserve" fill="#000">
+          <text key={i} x={op.x} y={op.y} fontSize={op.size} fontWeight={op.bold ? 700 : 400} fontFamily={`'${PREVIEW_FONT}', 'Bookman Old Style', serif`} xmlSpace="preserve" fill="#000">
             {op.text}
           </text>
         ) : null,
@@ -351,20 +356,21 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
 
   const selSettings = selSheet ? sheetSettings(settings, selSheet.key) : null;
   const cellKey = !selSheet || !selection ? null : selection.kind === 'col' ? `-1:${selection.index}` : selection.col !== undefined ? `${selection.index}:${selection.col}` : null;
-  const originalText = !selSheet || !selection ? '' : selection.kind === 'col' ? (selSheet.columns[selection.index]?.header ?? '') : (selSheet.rows[selection.index]?.cells[selection.col ?? 0] ?? '');
+  const originalText = !selSheet || !selection ? '' : selection.kind === 'col' ? heading(selSheet.columns[selection.index]?.header ?? '').text : (selSheet.rows[selection.index]?.cells[selection.col ?? 0] ?? '');
   const selRow = selection?.kind === 'row' && selSheet ? selSheet.rows[selection.index] : null;
   const selPage = selection ? pages.find((p) => p.sheet === selection.sheet && p.table?.rows.some((r) => r.index === (selection.kind === 'row' ? selection.index : -1))) : undefined;
   const selRowHeight = selection?.kind === 'row' ? selPage?.table?.rows.find((r) => r.index === selection.index)?.h : undefined;
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-gray-100" role="dialog" aria-modal="true" aria-labelledby="pdf-editor-title">
+      <style>{PREVIEW_FONT_FACES}</style>
       <div className="flex flex-wrap items-center gap-2 border-b border-gray-200 bg-white px-4 py-2">
         <div className="min-w-0 flex-1">
           <h2 id="pdf-editor-title" className="text-[13px] font-semibold text-gray-900">
             Abstract &amp; Estimate PDF
           </h2>
           <p className="truncate text-xs text-gray-500">
-            {file ? `From ${file.name}` : 'From this DPR’s estimate, as in the Excel download'} · {pages.length} {pages.length === 1 ? 'page' : 'pages'} · A4
+            {file ? `From ${file.name}` : 'From this DPR’s estimate, as in the Excel download'} · {pages.length} {pages.length === 1 ? 'page' : 'pages'} · {PAPER[settings.paper]?.label ?? 'Letter'}
           </p>
         </div>
         <div className="flex items-center gap-1" aria-label="Zoom">
@@ -449,11 +455,11 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
             <Section title={`Selected: ${selSheet.key}`}>
               <label className="block text-[13px] text-gray-700">
                 Sheet title
-                <input className="input mt-1 w-full min-w-0" value={selSettings.title ?? selSheet.title} onChange={(ev) => setSheet(selSheet.key, { title: ev.target.value })} />
+                <input className="input mt-1 w-full min-w-0" value={selSettings.title ?? SHEET_TITLES[selSheet.key] ?? selSheet.title} onChange={(ev) => setSheet(selSheet.key, { title: ev.target.value })} />
               </label>
               <label className="block text-[13px] text-gray-700">
                 Project line
-                <input className="input mt-1 w-full min-w-0" value={selSettings.note ?? selSheet.notes[0] ?? ''} onChange={(ev) => setSheet(selSheet.key, { note: ev.target.value })} />
+                <input className="input mt-1 w-full min-w-0" value={selSettings.note ?? projectLine(selSheet.notes[0] ?? '')} onChange={(ev) => setSheet(selSheet.key, { note: ev.target.value })} />
               </label>
               {cellKey && (
                 <label className="block text-[13px] text-gray-700">
@@ -536,9 +542,11 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
           )}
 
           <Section title="Text size (pt)">
-            <Num label="Titles and letterhead" value={settings.titleSize} min={6} max={24} onChange={(v) => set({ titleSize: v })} />
-            <Num label="Column headings" value={settings.headerSize} min={5} max={16} onChange={(v) => set({ headerSize: v })} />
-            <Num label="Table text" value={settings.bodySize} min={5} max={16} onChange={(v) => set({ bodySize: v })} />
+            <Num label="Letterhead" value={settings.letterheadSize} min={5} max={24} step={0.1} onChange={(v) => set({ letterheadSize: v })} />
+            <Num label="Project name" value={settings.projectSize} min={5} max={24} step={0.1} onChange={(v) => set({ projectSize: v })} />
+            <Num label="Sheet title" value={settings.titleSize} min={5} max={24} step={0.1} onChange={(v) => set({ titleSize: v })} />
+            <Num label="Column headings" value={settings.headerSize} min={4} max={16} step={0.1} onChange={(v) => set({ headerSize: v })} />
+            <Num label="Table text" value={settings.bodySize} min={4} max={16} step={0.1} onChange={(v) => set({ bodySize: v })} />
             <Num label="Line spacing" value={settings.lineSpacing} min={1} max={2.5} step={0.05} onChange={(v) => set({ lineSpacing: v })} />
           </Section>
 
@@ -552,22 +560,32 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
                 <option value="none">None</option>
               </select>
             </label>
-            <Num label="Inner line weight (pt)" value={settings.innerLine} min={0} max={3} step={0.25} onChange={(v) => set({ innerLine: v })} />
-            <Num label="Outer line weight (pt)" value={settings.outerLine} min={0} max={4} step={0.25} onChange={(v) => set({ outerLine: v })} />
+            <Num label="Inner line weight (pt)" value={settings.innerLine} min={0} max={3} step={0.04} onChange={(v) => set({ innerLine: v })} />
+            <Num label="Outer line weight (pt)" value={settings.outerLine} min={0} max={4} step={0.04} onChange={(v) => set({ outerLine: v })} />
             <Check label="Shade the heading row" checked={settings.headerFill} onChange={(v) => set({ headerFill: v })} />
           </Section>
 
           <Section title="Rows and cells">
-            <Num label="Minimum row height (pt)" value={settings.minRowHeight} min={6} max={60} onChange={(v) => set({ minRowHeight: v })} />
-            <Num label="Cell padding (pt)" value={settings.cellPadding} min={0} max={12} onChange={(v) => set({ cellPadding: v })} />
+            <Num label="Minimum row height (pt)" value={settings.minRowHeight} min={4} max={60} step={0.25} onChange={(v) => set({ minRowHeight: v })} />
+            <Num label="Cell padding (pt)" value={settings.cellPadding} min={0} max={12} step={0.2} onChange={(v) => set({ cellPadding: v })} />
+            <Check label="Justify descriptions" checked={settings.justify} onChange={(v) => set({ justify: v })} />
             <Check label="Repeat headings on every page" checked={settings.repeatHeader} onChange={(v) => set({ repeatHeader: v })} />
             <p className="text-xs text-gray-500">On the page: click a row or a heading to select it, double-click any cell or heading to edit its text, drag a line between columns or under a row to resize.</p>
           </Section>
 
           <Section title="Page">
-            <Num label="Margins (mm)" value={settings.marginMm} min={5} max={40} step={1} onChange={(v) => set({ marginMm: v })} />
+            <label className="flex items-center justify-between gap-3 text-[13px] text-gray-700">
+              <span>Paper</span>
+              <select className="input h-7 w-36 text-xs" value={settings.paper} onChange={(ev) => set({ paper: ev.target.value as Paper })}>
+                <option value="letter">Letter (as KPTCL prints)</option>
+                <option value="a4">A4</option>
+              </select>
+            </label>
+            <Num label="Left and right margins (mm)" value={settings.marginMm} min={2} max={40} step={0.5} onChange={(v) => set({ marginMm: v })} />
+            <Num label="Top margin (mm)" value={settings.topMm} min={2} max={40} step={0.5} onChange={(v) => set({ topMm: v })} />
+            <Num label="Bottom margin (mm)" value={settings.bottomMm} min={2} max={40} step={0.5} onChange={(v) => set({ bottomMm: v })} />
             <Check label="Page numbers" checked={settings.pageNumbers} onChange={(v) => set({ pageNumbers: v })} />
-            <Check label="Project line under the letterhead" checked={settings.showNotes} onChange={(v) => set({ showNotes: v })} />
+            <Check label="Project name under the letterhead" checked={settings.showNotes} onChange={(v) => set({ showNotes: v })} />
             <label className="block text-[13px] text-gray-700">
               Letterhead (one line each)
               <textarea className="input mt-1" rows={2} value={settings.letterhead.join('\n')} onChange={(ev) => set({ letterhead: ev.target.value.split('\n') })} />
