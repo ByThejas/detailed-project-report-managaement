@@ -8,3 +8,6 @@ coverage
 
 # Real estimate workbooks used by optional local tests (not committed: the repo is public)
 fixtures/private/
+
+# Scratch archives Claude uses to copy files in and out (not source)
+.claude-tmp/
