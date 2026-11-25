@@ -14,6 +14,8 @@ const TRANSFORMER_RATES: Record<string, { supply: number; erection: number; test
 
 /** Marks lines that are still the sample's, so the DPR is not finished with sample quantities and rates. */
 export const TEMPLATE_SOURCE = 'Kogali sample template';
+/** The sample's percentages and statutory charge, which an uploaded estimate's own figures replace. */
+export const TEMPLATE_CHARGES = { areaLoadingPct: 5, gstPct: 18, statutoryCharges: 50_000 } as const;
 
 let seq = 0;
 const id = () => `l${Date.now().toString(36)}${(seq++).toString(36)}`;
@@ -114,9 +116,7 @@ export function buildTemplate(dpr: { capacity: string; voltage: string; stream?:
   return {
     lines: empty ? [] : lines.map((l) => ({ ...l, source: TEMPLATE_SOURCE })),
     misc: { supply: 0, erection: 0, testing: 0, civil: 0, dismantling: 0 },
-    areaLoadingPct: 5,
-    gstPct: 18,
-    statutoryCharges: 50_000,
+    ...TEMPLATE_CHARGES,
     dismantlingStatutory: 0,
     templateCapacity: `${dpr.capacity} ${dpr.voltage}`,
     updatedAt: new Date().toISOString(),

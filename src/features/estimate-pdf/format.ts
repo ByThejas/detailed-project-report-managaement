@@ -25,7 +25,16 @@ export interface SheetSettings {
   cells?: Record<string, string>;
   /** Edited project line under the letterhead. */
   note?: string;
+  /** Column widths set on one page only, by page number within the sheet ("2"); other pages keep theirs. */
+  pageColWeights?: Record<string, number[]>;
 }
+
+/** The settings a page can change for itself alone in the editor. */
+export const PAGE_STYLE_KEYS = [
+  'letterheadSize', 'projectSize', 'titleSize', 'headerSize', 'bodySize', 'lineSpacing', 'cellPadding', 'minRowHeight',
+  'borders', 'innerLine', 'outerLine', 'headerFill', 'repeatHeader', 'justify', 'marginMm', 'topMm', 'bottomMm', 'showNotes', 'letterhead',
+] as const;
+export type PageStyle = Partial<Pick<PdfSettings, (typeof PAGE_STYLE_KEYS)[number]>>;
 
 export interface PdfSettings {
   version: 2;
@@ -57,8 +66,10 @@ export interface PdfSettings {
   /** Paragraphs in the description column are justified, as in KPTCL's estimates. */
   justify: boolean;
   pageNumbers: boolean;
-  /** Signature titles printed under each abstract; empty for none. */
-  signatures: string[];
+  /** No longer printed: the abstracts carry no signature block. Kept so older saved settings still read. */
+  signatures?: string[];
+  /** Each page's own changes, by page key ("Part A Electrical#2"), on top of the settings above. */
+  pages?: Record<string, PageStyle>;
   sheets: Record<string, SheetSettings>;
   /** Sheet keys in print order; sheets not listed keep their place after these. */
   sheetOrder?: string[];
@@ -89,7 +100,6 @@ export const DEFAULT_PDF_SETTINGS: PdfSettings = {
   repeatHeader: true,
   justify: true,
   pageNumbers: false,
-  signatures: ['Assistant Engineer', 'Assistant Executive Engineer', 'Executive Engineer'],
   sheets: {},
 };
 
@@ -115,7 +125,7 @@ export function withDefaults(s: Partial<PdfSettings> | { version?: number } | nu
       const { include, title, cells, note, bold } = v ?? {};
       sheets[k] = { include, title, cells, note, bold };
     }
-    return { ...DEFAULT_PDF_SETTINGS, sheets, sheetOrder: saved.sheetOrder, pageOrder: saved.pageOrder, signatures: saved.signatures ?? DEFAULT_PDF_SETTINGS.signatures };
+    return { ...DEFAULT_PDF_SETTINGS, sheets, sheetOrder: saved.sheetOrder, pageOrder: saved.pageOrder };
   }
   return { ...DEFAULT_PDF_SETTINGS, ...saved, version: 2, sheets: { ...(saved.sheets ?? {}) } };
 }
@@ -126,13 +136,10 @@ export const isAbstract = (key: string) => /abstract/i.test(key);
 /** The sheet titles KPTCL prints, by worksheet name; other sheets keep the Excel's title. */
 export const SHEET_TITLES: Record<string, string> = {
   'General Abstract': 'General Abstract (Rs. in lakhs)',
-  'Abstract-I': 'Abstract - I (Rs. in lakhs)',
   'Part A Electrical': 'Supply of station materials, erection and commissioning',
   'Part B Civil': 'Civil works',
-  'Line Abstract': 'Abstract for line works (Rs. in lakhs)',
   'Line Supply': 'Supply of line materials, erection and commissioning',
   'Line Civil': 'Civil works for the line',
-  'Abstract-II': 'Abstract - II: Dismantling (Rs. in lakhs)',
   Dismantling: 'Dismantling works',
 };
 
@@ -177,8 +184,31 @@ const TOTAL_LABELS: Record<string, string> = {
 };
 export const totalLabel = (excel: string) => TOTAL_LABELS[excel.trim().toLowerCase()] ?? excel;
 
-/** The project row: the DPR's name without the app's id in brackets. */
-export const projectLine = (note: string) => note.replace(/\s*\([^()\s]+\)\s*$/, '').trim();
+/** The project row: the DPR's name without the app's id in brackets (an id has a digit; "(Coyote)" is part of a name). */
+export const projectLine = (note: string) => note.replace(/\s*\((?=[^()\s]*\d)[^()\s]+\)\s*$/, '').trim();
+
+/** The abstracts (general abstract, Abstract-I, the line works abstract, Abstract-II), which print in KPTCL's abstract layout. */
+export const isPartAbstract = (key: string) => /^(General Abstract|Abstract-I|Abstract-II|Line Abstract)$/.test(key);
+
+/**
+ * KPTCL's abstract page, measured from the Jangamakote LILO abstract (25 Nov 2026) in points at Excel's 100%: Bookman
+ * 16 pt letterhead, 14 pt estimate name, 12 pt "ABSTRACT", headings and rows; lines 1.27 x the text size apart; a row is its
+ * lines plus 11 pt (one line 26.3 pt, two lines 41.6 pt); columns 50.5 / 496.6 / 125.2 pt; a medium outer frame around
+ * the page block and thin lines inside. The page scales it to the table width, as Excel's fit-to-page print does.
+ */
+export const ABSTRACT_STYLE = {
+  widths: [50.5, 496.6, 125.2],
+  letterhead: { size: 16.4, extra: 10.2 },
+  project: { size: 14.5, extra: 8.6 },
+  title: { size: 12, extra: 11.06 },
+  header: { size: 12, extra: 11.06 },
+  body: { size: 12, extra: 11.06 },
+  lineStep: 1.27,
+  padLeft: 3.4,
+  padRight: 1.9,
+  /** The outer frame is Excel's medium border: twice the thin inner lines. */
+  outerToInner: 2,
+};
 
 export type ColumnRole = 'sl' | 'desc' | 'unit' | 'qty' | 'money';
 

@@ -118,6 +118,12 @@ export interface StatedAbstract {
   areaLoadingPct?: number;
   /** gst ÷ (basic + loading), %, rounded to 2 decimals. */
   gstPct?: number;
+  /** Each row's wording as the file has it ("Material cost", "Labour/Erection charges and …"), for printing the abstract. */
+  labels?: Partial<Record<'material' | 'labour' | 'civil' | 'basic' | 'loading' | 'gst' | 'tender' | 'statutory' | 'forest' | 'land' | 'total', string>>;
+  /** The estimate's name in the title rows ("Estimate for Conversion of 66kV S/C tapped line …"). */
+  heading?: string;
+  /** The sheet's own title row ("ABSTRACT"). */
+  sheetTitle?: string;
 }
 
 export type ColumnRole =

@@ -1,7 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sampleStore } from '@/lib/sampleStore';
 import type { DprRow } from '@/features/reports/types';
-import { addFileHeadings } from '@/features/boq-import/toEstimateLine';
+import { addFileHeadings, dropPresets } from '@/features/boq-import/toEstimateLine';
 import { buildTemplate } from './template';
 import type { Estimate } from './types';
 
@@ -18,7 +18,9 @@ export function useEstimate(dpr: DprRow | undefined) {
       flushEstimateSaves();
       const saved = sampleStore.estimate(dpr!.id);
       // An estimate imported before heading rows were kept gets them from the file's saved reading.
-      return saved ? addFileHeadings(saved, Object.values(sampleStore.boqReads(dpr!.id)).flat()) : buildTemplate(dpr!);
+      // An estimate made from an uploaded workbook drops what is left of the sample template (items, loading, statutory charge).
+      const reads = Object.values(sampleStore.boqReads(dpr!.id)).flat();
+      return saved ? dropPresets(addFileHeadings(saved, reads), reads) : buildTemplate(dpr!);
     },
   });
 }

@@ -4,12 +4,16 @@ import { abstractValues, amountFactor, generalAbstract, hasLineWorks, lineAmount
 import { ANALYSIS_YEARS, DEFAULT_BCR_INPUTS, DEFAULT_FINANCIALS, isBcrExempt, kptclAppraisal, summariseFinancials } from './finance';
 import type { BcrInputs } from './finance';
 import type { Estimate, EstimateSection } from './types';
+import type { BoqReadResult, StatedAbstract } from '@/features/boq-import/types';
+import { abstractHeadings } from '@/features/boq-import/parse';
+import { sampleStore } from '@/lib/sampleStore';
 
 const LAKH = 100_000;
 const HEADER_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF111827' } } as const;
 const INPUT_FILL = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFEF9C3' } } as const;
 const RS = '#,##0.00';
-const LAKHS = '#,##0.00';
+/** KPTCL's abstracts show lakhs as plain two-decimal figures ("0.00"), no thousands grouping. */
+const ABSTRACT_LAKHS = '0.00';
 
 /** A cell holding a live formula, with the app's own figure as the stored result so viewers that do not recalculate still show it. */
 const f = (formula: string, result: number): CellValue => ({ formula, result });
@@ -146,17 +150,62 @@ interface AbstractSpec {
   civil?: string;
   charges: { statutory: number; forest: number; land: number };
   labels: { labour: string };
+  /** The uploaded workbook's abstract for this part, whose wording and estimate name the sheet prints. */
+  stated?: StatedAbstract;
 }
 
-/** An abstract sheet in the 11 rows of the KPTCL estimate. Every row is a formula over the item sheets' totals and the yellow inputs below the table. */
+/** The KPTCL abstract's own wording, used where the uploaded workbook has no abstract for the part. */
+const KPTCL_LABELS = {
+  material: 'Material cost',
+  civil: 'Cost of Civil Engineering Works',
+  basic: 'Basic Rate (Sum of Sl No. 1 to 3)',
+  loading: 'Area Specific Loading on Basic Rates (Sl No. 4) wherever applicable',
+  gst: 'Applicable GST on Sl No. 4 & 5',
+  tender: 'Cost of the Estimate (Sum of Sl No. 4 to 6)\nAmount put to Tender',
+  statutory: 'Statutory Charges such as PTCC, Electrical Inspectorate, Payment towards Civic Bodies etc.,',
+  forest: 'Forest Clearance, Tree/Crop Cut Compensation etc.,',
+  land: 'Land/Corridor/Tower Foot Area Compensation etc.,',
+  total: 'Total Cost of Estimate (Sum of Sl No. 7 to 10)',
+};
+
+/** The estimate's name on an uploaded abstract (older readings kept only the joined title rows). */
+const statedHeading = (a?: StatedAbstract) => a?.heading ?? (a ? abstractHeadings(a.title.split(' · ')).heading : undefined);
+
+/** The uploaded workbooks' abstracts, by part: the largest of each, as the import takes its charges from. */
+export function statedAbstracts(reads: BoqReadResult[]): Partial<Record<AbstractPart, StatedAbstract>> {
+  const out: Partial<Record<AbstractPart, StatedAbstract>> = {};
+  for (const a of reads.flatMap((r) => r.abstracts ?? [])) {
+    const cur = out[a.part];
+    if (!cur || (a.total ?? 0) > (cur.total ?? 0)) out[a.part] = a;
+  }
+  return out;
+}
+
+const savedReads = (dprId: string): BoqReadResult[] => {
+  try {
+    return Object.values(sampleStore.boqReads(dprId)).flat();
+  } catch {
+    return [];
+  }
+};
+
+/**
+ * An abstract sheet in the 11 rows of the KPTCL estimate, worded and titled as KPTCL prints it ("ABSTRACT", the estimate's
+ * name, Sl. No. / Particulars / Amount in Rs. (Lakhs)). Every row is a formula over the item sheets' totals and the yellow
+ * inputs below the table. The wording and the estimate's name come from the uploaded workbook's abstract when there is one.
+ */
 function abstractSheet(wb: Workbook, e: Estimate, spec: AbstractSpec, notes: string[]): Ref {
   const ws = wb.addWorksheet(spec.name);
-  ws.columns = [{ width: 8 }, { width: 70 }, { width: 20 }];
-  ws.addRow([spec.title]).font = { bold: true, size: 14 };
-  for (const n of notes) ws.addRow([n]).font = { italic: true, color: { argb: 'FF64748B' } };
+  ws.columns = [{ width: 11 }, { width: 75 }, { width: 25 }];
+  const stated = spec.stated;
+  const word = { ...KPTCL_LABELS, labour: spec.labels.labour, ...(stated?.labels ?? {}) };
+  ws.addRow([stated?.sheetTitle ?? 'ABSTRACT']).font = { bold: true, size: 14 };
+  const name = statedHeading(stated);
+  for (const n of name ? [name, ...notes.slice(1)] : notes) ws.addRow([n]).font = { italic: true, color: { argb: 'FF64748B' } };
   ws.addRow([]);
-  const header = ws.addRow(['Sl. no.', 'Particulars', 'Amount (Rs. lakhs)']);
+  const header = ws.addRow(['Sl. No.', 'Particulars', 'Amount in Rs.\n(Lakhs)']);
   header.font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  header.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' };
   header.eachCell((c) => (c.fill = HEADER_FILL));
   ws.views = [{ state: 'frozen', ySplit: header.number }];
   const v = abstractValues(e, spec.part);
@@ -165,21 +214,22 @@ function abstractSheet(wb: Workbook, e: Estimate, spec: AbstractSpec, notes: str
   const pct = `$C$${inputsAt}`;
   const gst = `$C$${inputsAt + 1}`;
   const rows: [string, string, string, number][] = [
-    ['1', 'Material cost', spec.material ? `${spec.material}/${LAKH}` : '0', v.material],
-    ['2', spec.labels.labour, spec.labour ? `(${spec.labour})/${LAKH}` : '0', v.labour],
-    ['3', 'Cost of civil engineering works', spec.civil ? `${spec.civil}/${LAKH}` : '0', v.civil],
-    ['4', 'Basic rate (sum of 1 to 3)', `SUM(C${t}:C${t + 2})`, v.basic],
-    ['5', `Area-specific loading on basic rate`, `C${t + 3}*${pct}/100`, v.loading],
-    ['6', 'Applicable GST on 4 and 5', `(C${t + 3}+C${t + 4})*${gst}/100`, v.gst],
-    ['7', 'Cost of the estimate put to tender (4 + 5 + 6)', `C${t + 3}+C${t + 4}+C${t + 5}`, v.tender],
-    ['8', 'Statutory charges (PTCC, Electrical Inspectorate etc.)', `C${inputsAt + 2}/${LAKH}`, v.statutory],
-    ['9', 'Forest clearance, tree / crop cut compensation', `C${inputsAt + 3}/${LAKH}`, v.forest],
-    ['10', 'Land / corridor / tower-foot area compensation', `C${inputsAt + 4}/${LAKH}`, v.land],
-    ['', 'Total estimate cost (7 to 10)', `C${t + 6}+SUM(C${t + 7}:C${t + 9})`, v.total],
+    ['1', word.material, spec.material ? `${spec.material}/${LAKH}` : '0', v.material],
+    ['2', word.labour, spec.labour ? `(${spec.labour})/${LAKH}` : '0', v.labour],
+    ['3', word.civil, spec.civil ? `${spec.civil}/${LAKH}` : '0', v.civil],
+    ['4', word.basic, `SUM(C${t}:C${t + 2})`, v.basic],
+    ['5', word.loading, `C${t + 3}*${pct}/100`, v.loading],
+    ['6', word.gst, `(C${t + 3}+C${t + 4})*${gst}/100`, v.gst],
+    ['7', word.tender, `C${t + 3}+C${t + 4}+C${t + 5}`, v.tender],
+    ['8', word.statutory, `C${inputsAt + 2}/${LAKH}`, v.statutory],
+    ['9', word.forest, `C${inputsAt + 3}/${LAKH}`, v.forest],
+    ['10', word.land, `C${inputsAt + 4}/${LAKH}`, v.land],
+    ['11', word.total, `C${t + 6}+SUM(C${t + 7}:C${t + 9})`, v.total],
   ];
   rows.forEach(([i, label, formula, result], k) => {
     const row = ws.addRow([i, label, f(formula, result)]);
-    row.getCell(3).numFmt = LAKHS;
+    row.getCell(3).numFmt = ABSTRACT_LAKHS;
+    row.getCell(2).alignment = { wrapText: true, vertical: 'middle' };
     if ([3, 6, 10].includes(k)) row.font = { bold: true };
   });
   ws.addRow([]);
@@ -198,7 +248,8 @@ function abstractSheet(wb: Workbook, e: Estimate, spec: AbstractSpec, notes: str
 }
 
 /** Builds the estimate workbook with every amount, total, abstract row and the general abstract as a live formula. Exported for tests. */
-export async function buildEstimateWorkbook(dpr: DprRow, e: Estimate): Promise<Workbook> {
+export async function buildEstimateWorkbook(dpr: DprRow, e: Estimate, reads: BoqReadResult[] = savedReads(dpr.id)): Promise<Workbook> {
+  const stated = statedAbstracts(reads);
   const { default: ExcelJS } = await import('exceljs');
   const wb = new ExcelJS.Workbook();
   wb.creator = 'DPR Manager';
@@ -252,21 +303,21 @@ export async function buildEstimateWorkbook(dpr: DprRow, e: Estimate): Promise<W
     name: 'Abstract-I', title: 'Abstract-I: capital works (Rs. lakhs)', part: 'I',
     material: ref(A.supply), labour: `${ref(A.erection)}+${ref(A.testing)}`, civil: ref(B.civil),
     charges: { statutory: e.statutoryCharges, forest: e.forestCompensation ?? 0, land: e.landCompensation ?? 0 },
-    labels: { labour: 'Labour / erection / testing & commissioning charges' },
+    labels: { labour: 'Labour/Erection charges and Testing & Commissioning Charges' }, stated: stated.I,
   }, notes);
   const absLine = lineWorks
     ? abstractSheet(wb, e, {
         name: 'Line Abstract', title: 'Abstract: line works (Rs. lakhs)', part: 'line',
         material: ref(L.lineSupply), labour: `${ref(L.lineErection)}+${ref(L.lineTesting)}`, civil: ref(LC.lineCivil),
         charges: { statutory: e.lineCharges?.statutory ?? 0, forest: e.lineCharges?.forestCompensation ?? 0, land: e.lineCharges?.landCompensation ?? 0 },
-        labels: { labour: 'Labour / erection / testing & commissioning charges' },
+        labels: { labour: 'Labour/Erection charges and Testing & Commissioning Charges' }, stated: stated.line,
       }, notes)
     : null;
   const absII = dismantling
     ? abstractSheet(wb, e, {
         name: 'Abstract-II', title: 'Abstract-II: dismantling (Rs. lakhs)', part: 'II',
         labour: ref(D.dismantling), charges: { statutory: e.dismantlingStatutory ?? 0, forest: 0, land: 0 },
-        labels: { labour: 'Labour / dismantling charges' },
+        labels: { labour: 'Labour/Dismantling charges' }, stated: stated.II,
       }, notes)
     : null;
 
@@ -276,7 +327,8 @@ export async function buildEstimateWorkbook(dpr: DprRow, e: Estimate): Promise<W
   gab.addRow(['General abstract (Rs. lakhs)']).font = { bold: true, size: 14 };
   for (const n of notes) gab.addRow([n]).font = { italic: true, color: { argb: 'FF64748B' } };
   gab.addRow([]);
-  const gh = gab.addRow(['Sl. no.', 'Particulars', 'Amount (Rs. lakhs)']);
+  const gh = gab.addRow(['Sl. No.', 'Particulars', 'Amount in Rs.\n(Lakhs)']);
+  gh.alignment = { wrapText: true, vertical: 'middle', horizontal: 'center' };
   gh.font = { bold: true, color: { argb: 'FFFFFFFF' } };
   gh.eachCell((c) => (c.fill = HEADER_FILL));
   gab.views = [{ state: 'frozen', ySplit: gh.number }];
@@ -287,11 +339,11 @@ export async function buildEstimateWorkbook(dpr: DprRow, e: Estimate): Promise<W
   const firstPart = gab.rowCount + 1;
   parts.forEach(([label, r, val], i) => {
     const row = gab.addRow([i + 1, label, f(at(r), val)]);
-    row.getCell(3).numFmt = LAKHS;
+    row.getCell(3).numFmt = ABSTRACT_LAKHS;
   });
   const gt = gab.addRow([null, 'Total project cost', f(`ROUND(SUM(C${firstPart}:C${gab.rowCount}),2)`, g.total)]);
   gt.font = { bold: true };
-  gt.getCell(3).numFmt = LAKHS;
+  gt.getCell(3).numFmt = ABSTRACT_LAKHS;
   const projectCost: Ref = { sheet: 'General Abstract', cell: `C${gt.number}` };
   // The estimate sheets show zeros as blank cells; the cost-benefit sheets keep theirs (year 0, nil flows).
   wb.eachSheet((ws) => blankZeros(ws));

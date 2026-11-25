@@ -535,7 +535,7 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
   return { items, skipped, totals, misc, summary };
 }
 
-type AbstractKey = Exclude<keyof StatedAbstract, 'sheet' | 'part' | 'title' | 'areaLoadingPct' | 'gstPct'>;
+type AbstractKey = Exclude<keyof StatedAbstract, 'sheet' | 'part' | 'title' | 'areaLoadingPct' | 'gstPct' | 'labels' | 'heading' | 'sheetTitle'>;
 /** Row labels of a KPTCL abstract, checked in this order (e.g. "Area loading on Basic rate" is loading, not basic). */
 const ABSTRACT_LABELS: [AbstractKey, RegExp][] = [
   ['total', /total (estimated )?(cost of )?(the )?(estimate|estimte|project|work)|total estimate(d)? cost/],
@@ -550,14 +550,31 @@ const ABSTRACT_LABELS: [AbstractKey, RegExp][] = [
   ['civil', /civil/],
 ];
 
+/**
+ * A label as the file words it, line breaks kept. A numbered list under it (the loading rates by area, "1. Restricted
+ * Area-12 %" …) sits below the row's height in the workbook, so it does not print and is left out.
+ */
+const rawLabel = (v: Cell | undefined) => {
+  if (v === null || v === undefined) return '';
+  const lines = String(v).replace(/[ \t\u00a0]+/g, ' ').split(/\r?\n/).map((l) => l.trim());
+  const list = lines.findIndex((l, i) => i > 0 && /^\d+\s*[.)]/.test(l));
+  return (list > 0 ? lines.slice(0, list) : lines).join('\n').trim();
+};
+
 /** Reads the figures off an abstract sheet (material, labour, civil, basic, loading, GST, statutory, compensation, total). */
 export function readAbstract(sheet: SheetGrid): StatedAbstract | null {
   const found: Partial<Record<AbstractKey, number>> = {};
+  const labels: NonNullable<StatedAbstract['labels']> = {};
   let firstLabelRow = -1;
   sheet.rows.forEach((cells, r) => {
     for (let c = 0; c < cells.length; c++) {
       const label = norm(text(cells[c]));
       if (!label || /^say\b/.test(label)) continue;
+      // Row 7 ("Cost of the Estimate (Sum of Sl No. 4 to 6) Amount put to Tender") is not read for a figure; its wording is kept.
+      if (/put to tender|4 to 6/.test(label) && !/total/.test(label)) {
+        labels.tender ??= rawLabel(cells[c]);
+        break;
+      }
       const hit = ABSTRACT_LABELS.find(([, re]) => re.test(label));
       if (!hit) continue;
       if (found[hit[0]] === undefined) {
@@ -565,6 +582,7 @@ export function readAbstract(sheet: SheetGrid): StatedAbstract | null {
         const value = after.find((v) => v !== null && v !== undefined);
         if (value !== undefined && value !== null) {
           found[hit[0]] = value;
+          labels[hit[0]] = rawLabel(cells[c]);
           if (firstLabelRow < 0) firstLabelRow = r;
         }
       }
@@ -587,10 +605,26 @@ export function readAbstract(sheet: SheetGrid): StatedAbstract | null {
       : /\bline\b|\btl\b|lilo/.test(name) || /\bline\b|lilo/.test(all)
         ? 'line'
         : 'I';
-  const out: StatedAbstract = { sheet: sheet.name, part, title, ...found };
+  const rawTitles = sheet.rows.slice(0, firstLabelRow).flatMap((cells) => cells.map((v) => (v === null || v === undefined ? '' : String(v))));
+  const out: StatedAbstract = { sheet: sheet.name, part, title, ...found, labels, ...abstractHeadings(rawTitles) };
   if (found.loading !== undefined && found.basic) out.areaLoadingPct = r2((found.loading / found.basic) * 100);
   if (found.gst !== undefined && found.basic) out.gstPct = r2((found.gst / (found.basic + (found.loading ?? 0))) * 100);
   return out;
+}
+
+/**
+ * The estimate's name and the sheet's own title among an abstract's title rows: the letterhead, the estimate's name,
+ * "ABSTRACT" and the column headings come in that order; the name is the longest line that is none of the others.
+ */
+export function abstractHeadings(titleCells: string[]): { heading?: string; sheetTitle?: string } {
+  // Spaces are kept as typed (Excel prints "of  66kv" with both), only line breaks become spaces.
+  const lines = titleCells.map((t) => t.replace(/[\r\n\t\u00a0]+/g, ' ').trim()).filter(Boolean);
+  const flat = (t: string) => t.replace(/\s+/g, ' ');
+  const sheetTitle = lines.map(flat).find((t) => /^abstract\b/i.test(t) && t.length < 40);
+  const heading = lines
+    .filter((t) => flat(t) !== sheetTitle && !/corporation limited|^sl\.? ?no|^particulars|^amount\b|^rs\.?\b/i.test(t))
+    .sort((a, b) => flat(b).length - flat(a).length)[0];
+  return { ...(heading && heading.length > 15 ? { heading } : {}), ...(sheetTitle ? { sheetTitle } : {}) };
 }
 
 const isFullAbstract = (a: StatedAbstract) => a.basic !== undefined && a.total !== undefined && (a.material !== undefined || a.labour !== undefined) && a.gst !== undefined;

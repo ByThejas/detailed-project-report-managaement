@@ -77,7 +77,9 @@ export function cellText(cell: Cell): string {
   if (typeof v === 'number') {
     if (!Number.isFinite(v) || Math.abs(v) < 0.005) return '';
     const fmt = cell.numFmt ?? '';
-    return /0\.00/.test(fmt) ? inr2.format(v) : inrN.format(v);
+    // "#,##0.00" groups thousands; a plain "0.00" (KPTCL's abstracts) does not.
+    if (/0\.00/.test(fmt)) return /#,##/.test(fmt) ? inr2.format(v) : v.toFixed(2);
+    return inrN.format(v);
   }
   if (typeof v === 'boolean') return v ? 'TRUE' : 'FALSE';
   return printable(String(v).trim());

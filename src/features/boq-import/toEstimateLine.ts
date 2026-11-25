@@ -1,5 +1,5 @@
 import { SECTION_KEYS, lineAmounts } from '@/features/preparation/calc';
-import { newLine } from '@/features/preparation/template';
+import { TEMPLATE_CHARGES, TEMPLATE_SOURCE, newLine } from '@/features/preparation/template';
 import { isMultiRate, type Estimate, type EstimateLine, type EstimateSection } from '@/features/preparation/types';
 import type { BoqReadResult, ParsedItem, StatedAbstract } from './types';
 import { itemAmount } from './parse';
@@ -171,7 +171,34 @@ export function applyImport(e: Estimate, plan: ImportPlan, mode: ImportMode): Es
     for (const section of plan.sections) for (const key of Object.values(SECTION_KEYS[section])) misc[key] = 0;
   }
   for (const [k, v] of Object.entries(plan.misc) as [keyof Misc, number][]) misc[k] = mode === 'replace' ? v : (misc[k] ?? 0) + v;
-  return { ...e, ...plan.charges, lines: [...kept, ...plan.lines], misc };
+  return dropPresets({ ...e, ...plan.charges, lines: [...kept, ...plan.lines], misc }, []);
+}
+
+const fromFile = (l: EstimateLine) => !!l.source && SOURCE.test(l.source);
+
+/**
+ * An estimate built from an uploaded workbook keeps nothing of the sample template: the sample's unedited items (in
+ * parts the file has no items for, e.g. the sample Part A and dismantling under an uploaded line estimate) are dropped,
+ * and the sample's area loading and statutory charge, where still in place, give way to the file's abstract (or nil
+ * when the file states no statutory charge). Lines the user added or edited, and charges they typed, are kept.
+ */
+export function dropPresets(e: Estimate, reads: BoqReadResult[]): Estimate {
+  if (!e.lines.some(fromFile)) return e;
+  const lines = e.lines.filter((l) => l.source !== TEMPLATE_SOURCE);
+  const next: Estimate = { ...e, lines };
+  const pick = (part: StatedAbstract['part']) =>
+    reads.flatMap((r) => r.abstracts ?? []).filter((a) => a.part === part).sort((a, b) => (b.total ?? 0) - (a.total ?? 0))[0];
+  const ss = pick('I');
+  const tl = pick('line');
+  const pct = (ss ?? tl)?.areaLoadingPct;
+  if (e.areaLoadingPct === TEMPLATE_CHARGES.areaLoadingPct && pct !== undefined) next.areaLoadingPct = pct;
+  const gst = (ss ?? tl)?.gstPct;
+  if (e.gstPct === TEMPLATE_CHARGES.gstPct && gst !== undefined) next.gstPct = gst;
+  // The sample's Rs 50,000 is not the file's: the file's Abstract-I figure, or nil where the file states none.
+  if (e.statutoryCharges === TEMPLATE_CHARGES.statutoryCharges && (ss?.statutory ?? 0) !== TEMPLATE_CHARGES.statutoryCharges) next.statutoryCharges = ss?.statutory ?? 0;
+  const same =
+    lines.length === e.lines.length && next.areaLoadingPct === e.areaLoadingPct && next.gstPct === e.gstPct && next.statutoryCharges === e.statutoryCharges;
+  return same ? e : next;
 }
 
 const SOURCE = /^(.*) · (.+) row (\d+)(?: · |$)/;

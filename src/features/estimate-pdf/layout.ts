@@ -1,4 +1,4 @@
-import { MM, PAPER, SHEET_TITLES, columnRole, defaultOrientation, heading, isAbstract, projectLine, standardWidths, totalLabel, type PdfSettings, type SheetSettings } from './format';
+import { ABSTRACT_STYLE, DEFAULT_PDF_SETTINGS, MM, PAPER, SHEET_TITLES, columnRole, isPartAbstract, defaultOrientation, heading, projectLine, standardWidths, totalLabel, type PdfSettings, type SheetSettings } from './format';
 import type { Align, PdfSheet } from './sheets';
 
 /** Width of a string in points at a font size; the PDF's own font metrics in the app, an estimate in tests. */
@@ -64,6 +64,27 @@ export function wrapLines(text: string, width: number, size: number, bold: boole
   return out.length ? out : [{ text: '', end: true }];
 }
 
+/**
+ * Breaks a title into lines as Excel wraps a merged title cell: spaces are kept as typed ("of  66kv"), so lines break
+ * where Excel's do.
+ */
+export function wrapKeepSpaces(text: string, width: number, size: number, bold: boolean, measure: Measure): string[] {
+  const out: string[] = [];
+  for (const para of text.split('\n')) {
+    const words = para.trim().match(/\S+\s*/g) ?? [''];
+    let line = '';
+    for (const word of words) {
+      const next = line + word;
+      if (line && measure(next.trimEnd(), size, bold) > width) {
+        out.push(line.trimEnd());
+        line = word;
+      } else line = next;
+    }
+    out.push(line.trimEnd());
+  }
+  return out;
+}
+
 /** Breaks text into lines that fit the width, splitting over-long words. */
 export function wrap(text: string, width: number, size: number, bold: boolean, measure: Measure): string[] {
   return wrapLines(text, width, size, bold, measure).map((l) => l.text);
@@ -102,12 +123,34 @@ export function sheetSettings(s: PdfSettings, key: string): SheetSettings {
   return s.sheets[key] ?? {};
 }
 
+/**
+ * The settings one page prints with: the DPR's settings with that page's own changes on top. Each page keeps its own
+ * text sizes, lines, padding, margins and column widths, so an edit on one page leaves every other page as it was.
+ */
+export function pageSettings(s: PdfSettings, key: string, sheetPage: number): { style: PdfSettings; ss: SheetSettings } {
+  const own = s.pages?.[`${key}#${sheetPage}`];
+  const style = own ? { ...s, ...own } : s;
+  const base = sheetSettings(s, key);
+  const cols = base.pageColWeights?.[String(sheetPage)];
+  return { style, ss: cols ? { ...base, colWeights: cols } : base };
+}
+
 /** Column widths in points that fill the table width, from the user's weights or KPTCL's standard widths. */
 export function columnWidths(sheet: PdfSheet, ss: SheetSettings, tableWidth: number): number[] {
-  const weights = ss.colWeights?.length === sheet.columns.length ? ss.colWeights : sheet.weights?.length === sheet.columns.length ? sheet.weights : standardWidths(sheet.columns.map((c) => c.header), tableWidth);
+  const weights =
+    ss.colWeights?.length === sheet.columns.length
+      ? ss.colWeights
+      : sheet.weights?.length === sheet.columns.length
+        ? sheet.weights
+        : abstractLayout(sheet)
+          ? ABSTRACT_STYLE.widths
+          : standardWidths(sheet.columns.map((c) => c.header), tableWidth);
   const sum = weights.reduce((a, b) => a + Math.max(b, 0.1), 0);
   return weights.map((w) => (Math.max(w, 0.1) / sum) * tableWidth);
 }
+
+/** A part abstract made by the app (Sl. No. / Particulars / Amount), printed in KPTCL's abstract layout. */
+export const abstractLayout = (sheet: PdfSheet) => isPartAbstract(sheet.key) && sheet.columns.length === 3 && !sheet.weights;
 
 /** Lays every included sheet out on pages as drawing operations. The preview and the PDF both draw these, so they match. */
 export function layout(sheets: PdfSheet[], s: PdfSettings, measure: Measure): Page[] {
@@ -134,7 +177,21 @@ const baselines = (count: number, top: number, height: number, size: number, ste
   return Array.from({ length: count }, (_, i) => first + i * step);
 };
 
-function layoutSheet(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure: Measure): Page[] {
+function layoutSheet(sheet: PdfSheet, _ss: SheetSettings, base: PdfSettings, measure: Measure): Page[] {
+  const pages: Page[] = [];
+  let start = 0;
+  do {
+    const { style, ss } = pageSettings(base, sheet.key, pages.length + 1);
+    const { page, next } = layoutPage(sheet, ss, style, measure, pages.length + 1, start);
+    pages.push(page);
+    if (next <= start && start > 0) break; // nothing fitted: stop rather than loop
+    start = next;
+  } while (start < sheet.rows.length);
+  return pages;
+}
+
+/** One page of a sheet, from row `start`, with that page's own settings; returns the page and the first row left over. */
+function layoutPage(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure: Measure, sheetPage: number, start: number): { page: Page; next: number } {
   const orientation = ss.orientation ?? defaultOrientation(sheet.columns.length);
   const paper = PAPER[s.paper] ?? PAPER.letter;
   const [w, h] = orientation === 'landscape' ? [paper.h, paper.w] : [paper.w, paper.h];
@@ -145,14 +202,35 @@ function layoutSheet(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure
   const bottom = h - s.bottomMm * MM;
   const widths = columnWidths(sheet, ss, tableWidth);
   const xs = widths.reduce<number[]>((acc, cw) => [...acc, acc.at(-1)! + cw], [left]);
+  // A part abstract keeps KPTCL's abstract proportions, scaled to the page as Excel's fit-to-width print does; the
+  // editor's sizes, spacing and padding still apply, relative to their standard values.
+  const abs = abstractLayout(sheet);
+  const A = ABSTRACT_STYLE;
+  const D = DEFAULT_PDF_SETTINGS;
+  const sc = tableWidth / A.widths.reduce((a, b) => a + b, 0);
+  const sizes = abs
+    ? {
+        letterhead: A.letterhead.size * sc * (s.letterheadSize / D.letterheadSize),
+        project: A.project.size * sc * (s.projectSize / D.projectSize),
+        title: A.title.size * sc * (s.titleSize / D.titleSize),
+        header: A.header.size * sc * (s.headerSize / D.headerSize),
+        body: A.body.size * sc * (s.bodySize / D.bodySize),
+      }
+    : { letterhead: s.letterheadSize, project: s.projectSize, title: s.titleSize, header: s.headerSize, body: s.bodySize };
+  const spacing = abs ? A.lineStep * (s.lineSpacing / D.lineSpacing) : s.lineSpacing;
   const pad = s.cellPadding;
-  const step = s.bodySize * s.lineSpacing;
+  const padL = abs ? A.padLeft * sc * (pad / D.cellPadding) : pad;
+  const padR = abs ? A.padRight * sc * (pad / D.cellPadding) : pad;
+  /** Space a row adds around its lines; the editor's minimum row height still applies to other sheets. */
+  const rowExtra = (extra: number) => extra * sc * (s.minRowHeight / D.minRowHeight);
+  const outerLine = abs ? Math.max(s.outerLine, s.innerLine * A.outerToInner) : s.outerLine;
+  const step = sizes.body * spacing;
   const roles = sheet.columns.map((c, i) => columnRole(c.header, i));
   const desc = roles.indexOf('desc');
   const aligns: Align[] = roles.map((r, i) => (r === 'sl' || r === 'unit' || r === 'qty' ? 'center' : r === 'desc' ? 'left' : sheet.columns[i]!.align === 'left' ? 'left' : 'right'));
-  const headings = sheet.columns.map((c) => heading(c.header));
+  // The abstract prints its own headings ("Sl. No.", "Particulars", "Amount in Rs. (Lakhs)").
+  const headings = sheet.columns.map((c) => (abs ? { text: c.header } : heading(c.header)));
   const grouped = headings.some((x) => x.group);
-  const pages: Page[] = [];
   let page!: Page;
   let y = 0;
   const line = (x1: number, y1: number, x2: number, y2: number, width: number) => {
@@ -163,35 +241,36 @@ function layoutSheet(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure
   };
 
   const newPage = () => {
-    page = { w, h, sheet: sheet.key, sheetPage: pages.length + 1, ops: [], table: null };
-    pages.push(page);
+    page = { w, h, sheet: sheet.key, sheetPage, ops: [], table: null };
     y = topMargin;
   };
 
   /** One boxed, centred row across the page (letterhead, project, sheet title). */
-  const titleRow = (t: string, size: number, minHeight: number) => {
-    const lines = wrap(t, tableWidth - 2 * pad, size, true, measure);
-    const lstep = size * 1.27;
-    const height = Math.max(minHeight, lines.length * lstep);
+  const titleRow = (t: string, size: number, minHeight: number, extra?: number) => {
+    const lines = abs ? wrapKeepSpaces(t, tableWidth - padL - padR, size, true, measure) : wrap(t, tableWidth - padL - padR, size, true, measure);
+    const lstep = size * (abs ? spacing : 1.27);
+    const height = extra !== undefined ? lines.length * lstep + rowExtra(extra) : Math.max(minHeight, lines.length * lstep);
     baselines(lines.length, y, height, size, lstep).forEach((by, i) => text(lines[i]!, left + (tableWidth - measure(lines[i]!, size, true)) / 2, by, size, true));
     if (s.borders !== 'none') {
       const first = y === topMargin;
-      line(left, y, right, y, first ? s.outerLine : s.borders === 'outer' ? 0 : s.innerLine);
-      line(left, y, left, y + height, s.outerLine);
-      line(right, y, right, y + height, s.outerLine);
+      line(left, y, right, y, first ? outerLine : s.borders === 'outer' ? 0 : s.innerLine);
+      line(left, y, left, y + height, outerLine);
+      line(right, y, right, y + height, outerLine);
     }
     y += height;
   };
 
   // Cell text and the row's height.
   const rowBlock = (cells: string[], size: number, bold: boolean, fixed?: number, cellBold?: (i: number) => boolean) => {
-    const lines = cells.map((c, i) => wrapLines(c, Math.max(widths[i]! - 2 * pad, 4), size, cellBold?.(i) ?? bold, measure));
-    const natural = Math.max(...lines.map((l) => l.length)) * size * s.lineSpacing;
+    const lines = cells.map((c, i) => wrapLines(c, Math.max(widths[i]! - padL - padR, 4), size, cellBold?.(i) ?? bold, measure));
+    const count = Math.max(...lines.map((l) => l.length));
+    if (abs) return { lines, height: fixed ?? count * size * spacing + rowExtra(A.body.extra) };
+    const natural = count * size * s.lineSpacing;
     return { lines, height: fixed ?? Math.max(natural, s.minRowHeight) };
   };
   const drawCell = (lines: WrappedLine[], i: number, top: number, height: number, size: number, bold: boolean, align: Align, justify: boolean, lstep = size * s.lineSpacing, x0 = xs[i]!, x1 = xs[i + 1]!) => {
     const shown = lines.filter((_, k) => k * lstep < height + 0.5); // a row made shorter than its text clips the rest
-    const width = x1 - x0 - 2 * pad;
+    const width = x1 - x0 - padL - padR;
     baselines(shown.length, top, Math.max(height, shown.length * lstep), size, lstep).forEach((by, k) => {
       const l = shown[k]!;
       if (!l.text) return;
@@ -199,7 +278,7 @@ function layoutSheet(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure
       if (justify && !l.end && words.length > 1) {
         const widthsOf = words.map((wd) => measure(wd, size, bold));
         const gap = (width - widthsOf.reduce((a, b) => a + b, 0)) / (words.length - 1);
-        let x = x0 + pad;
+        let x = x0 + padL;
         words.forEach((wd, n) => {
           text(wd, x, by, size, bold);
           x += widthsOf[n]! + gap;
@@ -207,20 +286,22 @@ function layoutSheet(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure
         return;
       }
       const tw = measure(l.text, size, bold);
-      const x = align === 'right' ? x1 - pad - tw : align === 'center' ? x0 + (x1 - x0 - tw) / 2 : x0 + pad;
+      const x = align === 'right' ? x1 - padR - tw : align === 'center' ? x0 + (x1 - x0 - tw) / 2 : x0 + padL;
       text(l.text, x, by, size, bold);
     });
   };
 
   // Two-level headings: a group ("Supply of Material") spans its columns above their own headings.
-  const hsize = s.headerSize;
-  const hstep = hsize * 1.25;
+  const hsize = sizes.header;
+  const hstep = hsize * (abs ? spacing : 1.25);
   const headCells = headings.map((x, i) => ss.cells?.[`-1:${i}`] ?? x.text);
-  const headLines = headCells.map((c, i) => wrapLines(c, Math.max(widths[i]! - 2 * pad, 4), hsize, true, measure));
+  const headLines = headCells.map((c, i) => wrapLines(c, Math.max(widths[i]! - padL - padR, 4), hsize, true, measure));
   const groupH = grouped ? hsize * s.lineSpacing : 0;
   const subH = Math.max(...headLines.map((l, i) => (headings[i]!.group ? l.length : 0)), 0) * hstep + hsize * 0.13;
   const fullH = Math.max(...headLines.map((l, i) => (headings[i]!.group ? 0 : l.length)), 1) * hstep + hsize * 0.3;
-  const headerHeight = ss.rowHeights?.['-1'] ?? Math.max(groupH + subH, fullH, hsize * 3.92);
+  const headerHeight =
+    ss.rowHeights?.['-1'] ??
+    (abs ? Math.max(...headLines.map((l) => l.length), 1) * hstep + rowExtra(A.header.extra) : Math.max(groupH + subH, fullH, hsize * 3.92));
   const groups: { name: string; from: number; to: number }[] = [];
   headings.forEach((x, i) => {
     if (!x.group) return;
@@ -267,54 +348,40 @@ function layoutSheet(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure
         line(x, from, x, end, s.innerLine);
       });
     if (s.borders !== 'none') {
-      line(left, top, right, top, s.outerLine);
-      line(left, end, right, end, s.outerLine);
-      line(left, top, left, end, s.outerLine);
-      line(right, top, right, end, s.outerLine);
+      // Under the abstract's title rows the table's top edge is an inside line; the frame goes round the whole block.
+      line(left, top, right, top, abs && headed && page.sheetPage === 1 ? s.innerLine : outerLine);
+      line(left, end, right, end, outerLine);
+      line(left, top, left, end, outerLine);
+      line(right, top, right, end, outerLine);
     }
   };
 
   newPage();
-  for (const l of s.letterhead.filter((x) => x.trim())) titleRow(l, s.letterheadSize, s.letterheadSize * 1.27);
-  const note = ss.note ?? (sheet.notes[0] ? projectLine(sheet.notes[0]) : '');
-  if (s.showNotes && note?.trim()) titleRow(note, s.projectSize, s.projectSize * 2.66);
-  titleRow(ss.title?.trim() || SHEET_TITLES[sheet.key] || sheet.title, s.titleSize, s.titleSize * 1.306);
-  startTable(true);
+  if (sheetPage === 1) {
+    for (const l of s.letterhead.filter((x) => x.trim())) titleRow(l, sizes.letterhead, s.letterheadSize * 1.27, abs ? A.letterhead.extra : undefined);
+    const note = ss.note ?? (sheet.notes[0] ? projectLine(sheet.notes[0]) : '');
+    if (s.showNotes && note?.trim()) titleRow(note, sizes.project, s.projectSize * 2.66, abs ? A.project.extra : undefined);
+    titleRow(ss.title?.trim() || SHEET_TITLES[sheet.key] || sheet.title, sizes.title, s.titleSize * 1.306, abs ? A.title.extra : undefined);
+  }
+  startTable(sheetPage === 1 || s.repeatHeader);
 
-  sheet.rows.forEach((row, index) => {
+  let index = start;
+  for (; index < sheet.rows.length; index++) {
+    const row = sheet.rows[index]!;
     const bold = ss.bold?.[String(index)] ?? row.bold;
     // Closing rows print their label in bold, centred under the description.
     const cells = row.cells.map((c, i) => ss.cells?.[`${index}:${i}`] ?? (row.total && i === desc ? totalLabel(c) : c));
     // Item numbers like A1, A12 print bold; sub-items (a, b, i, 1) do not.
     const cellBold = (i: number) => (row.total && i === desc) || bold || (roles[i] === 'sl' && /^[A-Z]{1,3}\d+$/.test(cells[i]!.trim()));
-    const block = rowBlock(cells, s.bodySize, bold, ss.rowHeights?.[String(index)], cellBold);
-    if (y + block.height > bottom && page.table!.rows.some((r) => r.index >= 0)) {
-      closeTable();
-      newPage();
-      startTable(s.repeatHeader);
-    }
+    const block = rowBlock(cells, sizes.body, bold, ss.rowHeights?.[String(index)], cellBold);
+    // A row that does not fit starts the next page (a page always takes at least one row).
+    if (y + block.height > bottom && page.table!.rows.some((r) => r.index >= 0)) break;
     block.lines.forEach((l, i) =>
-      drawCell(l, i, y, block.height, s.bodySize, cellBold(i), row.total && i === desc ? 'center' : aligns[i]!, s.justify && i === desc && !row.total, step),
+      drawCell(l, i, y, block.height, sizes.body, cellBold(i), row.total && i === desc ? 'center' : aligns[i]!, s.justify && !abs && i === desc && !row.total, step),
     );
     page.table!.rows.push({ index, y, h: block.height });
     y += block.height;
-  });
-  closeTable();
-
-  if (s.signatures.length && isAbstract(sheet.key)) {
-    const need = 54;
-    if (y + need > bottom) {
-      newPage();
-      page.table = null;
-    }
-    y += 44;
-    const slot = tableWidth / s.signatures.length;
-    s.signatures.forEach((sig, i) => {
-      const t = sig.trim();
-      if (!t) return;
-      const tw = measure(t, s.titleSize, true);
-      text(t, left + slot * i + (slot - tw) / 2, y, s.titleSize, true);
-    });
   }
-  return pages;
+  closeTable();
+  return { page, next: index };
 }

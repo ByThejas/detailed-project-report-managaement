@@ -5,14 +5,14 @@ import { useToast } from '@/lib/toast';
 import { buildEstimateWorkbook } from '@/features/preparation/exportEstimate';
 import type { Estimate } from '@/features/preparation/types';
 import type { DprRow } from '@/features/reports/types';
-import { DEFAULT_PDF_SETTINGS, PAPER, SHEET_TITLES, defaultOrientation, heading, projectLine, withDefaults, type BorderStyle, type Orientation, type Paper, type PdfSettings, type SheetSettings } from './format';
-import { approxMeasure, columnWidths, layout, orderSheets, pageKey, sheetSettings, type Measure, type Page } from './layout';
+import { DEFAULT_PDF_SETTINGS, PAPER, SHEET_TITLES, defaultOrientation, heading, projectLine, withDefaults, type BorderStyle, type Orientation, type PageStyle, type Paper, type PdfSettings, type SheetSettings } from './format';
+import { approxMeasure, columnWidths, layout, orderSheets, pageKey, pageSettings, sheetSettings, type Measure, type Page } from './layout';
 import { FONT_FILES, PREVIEW_FONT, downloadPdf, loadFonts } from './renderPdf';
 import { sheetsFromFile, sheetsFromWorkbook, type PdfSheet } from './sheets';
 import { settingsKey } from './estimatePdfBytes';
 
 /** A row (with the clicked cell's column) or a column heading. */
-type Selection = { sheet: string; kind: 'row' | 'col'; index: number; col?: number } | null;
+type Selection = { sheet: string; kind: 'row' | 'col'; index: number; col?: number; page?: number } | null;
 
 const CELL_EDITOR = 'pdf-cell-text';
 const focusCellEditor = () => requestAnimationFrame(() => document.getElementById(CELL_EDITOR)?.focus());
@@ -70,6 +70,7 @@ function PageView({
   zoom,
   selection,
   onSelect,
+  onActivate,
   onDragCol,
   onDragRow,
 }: {
@@ -77,7 +78,9 @@ function PageView({
   zoom: number;
   selection: Selection;
   onSelect: (s: Selection) => void;
-  onDragCol: (sheet: string, boundary: number, start: number, dx: number) => void;
+  /** Clicking anywhere on a page makes it the page the settings edit. */
+  onActivate: (key: string) => void;
+  onDragCol: (sheet: string, sheetPage: number, boundary: number, start: number, dx: number) => void;
   onDragRow: (sheet: string, index: number, startHeight: number, dy: number) => void;
 }) {
   const t = page.table;
@@ -116,6 +119,7 @@ function PageView({
       className="block bg-white shadow-md ring-1 ring-gray-200"
       role="img"
       aria-label={`${page.sheet}, page ${page.sheetPage}`}
+      onClickCapture={() => onActivate(pageKey(page))}
       onClick={() => {
         if (!dragged.current) onSelect(null);
         dragged.current = false;
@@ -158,11 +162,11 @@ function PageView({
                   className="cursor-pointer"
                   onClick={(ev) => {
                     ev.stopPropagation();
-                    onSelect({ sheet: page.sheet, kind: 'col', index: c });
+                    onSelect({ sheet: page.sheet, kind: 'col', index: c, page: page.sheetPage });
                   }}
                   onDoubleClick={(ev) => {
                     ev.stopPropagation();
-                    onSelect({ sheet: page.sheet, kind: 'col', index: c });
+                    onSelect({ sheet: page.sheet, kind: 'col', index: c, page: page.sheetPage });
                     focusCellEditor();
                   }}
                 >
@@ -180,11 +184,11 @@ function PageView({
                 className="cursor-pointer"
                 onClick={(ev) => {
                   ev.stopPropagation();
-                  onSelect({ sheet: page.sheet, kind: 'row', index: r.index, col: colAt(ev) });
+                  onSelect({ sheet: page.sheet, kind: 'row', index: r.index, col: colAt(ev), page: page.sheetPage });
                 }}
                 onDoubleClick={(ev) => {
                   ev.stopPropagation();
-                  onSelect({ sheet: page.sheet, kind: 'row', index: r.index, col: colAt(ev) });
+                  onSelect({ sheet: page.sheet, kind: 'row', index: r.index, col: colAt(ev), page: page.sheetPage });
                   focusCellEditor();
                 }}
               >
@@ -218,7 +222,7 @@ function PageView({
                 fill="transparent"
                 style={{ cursor: 'col-resize' }}
                 onClick={(ev) => ev.stopPropagation()}
-              onPointerDown={(ev) => drag(ev, ({ dx }) => onDragCol(page.sheet, i, x, dx))}
+              onPointerDown={(ev) => drag(ev, ({ dx }) => onDragCol(page.sheet, page.sheetPage, i, x, dx))}
               >
                 <title>Drag to change the column width</title>
               </rect>
@@ -247,6 +251,8 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
   const [zoom, setZoom] = useState(1);
   const [selection, setSelection] = useState<Selection>(null);
   const [busy, setBusy] = useState(false);
+  /** The page the settings on the left change; every page keeps its own. */
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -292,27 +298,55 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
     set({ pageOrder: keys });
   };
   const pages = useMemo(() => (sheets ? layout(sheets, settings, measure) : []), [sheets, settings, measure]);
+  const active = pages.find((p) => pageKey(p) === activeKey) ?? pages[0];
+  const activeName = active ? `${active.sheet}${pages.filter((x) => x.sheet === active.sheet).length > 1 ? `, page ${active.sheetPage}` : ''}` : '';
+  /** The active page's settings: the DPR's, with that page's own changes. */
+  const pageStyle = active ? pageSettings(settings, active.sheet, active.sheetPage).style : settings;
+  /** Changes a setting on the active page only. */
+  const setPage = (patch: PageStyle) =>
+    setStored((cur) => {
+      const s = withDefaults(cur);
+      if (!active) return { ...s, ...patch };
+      const key = pageKey(active);
+      return { ...s, pages: { ...s.pages, [key]: { ...s.pages?.[key], ...patch } } };
+    });
+  const pageChanged = !!active && !!settings.pages?.[pageKey(active)] && Object.keys(settings.pages[pageKey(active)]!).length > 0;
+  const resetPage = () =>
+    setStored((cur) => {
+      const s = withDefaults(cur);
+      if (!active) return s;
+      const key = pageKey(active);
+      const pagesLeft = { ...s.pages };
+      delete pagesLeft[key];
+      const ss = s.sheets[active.sheet];
+      const cols = { ...ss?.pageColWeights };
+      delete cols[String(active.sheetPage)];
+      return { ...s, pages: pagesLeft, sheets: ss ? { ...s.sheets, [active.sheet]: { ...ss, pageColWeights: cols } } : s.sheets };
+    });
   const selSheet = sheets?.find((s) => s.key === selection?.sheet);
-  const tableWidthOf = (sheet: PdfSheet) => {
-    const page = pages.find((p) => p.sheet === sheet.key);
+  const tableWidthOf = (sheet: PdfSheet, n: number) => {
+    const page = pages.find((p) => p.sheet === sheet.key && p.sheetPage === n) ?? pages.find((p) => p.sheet === sheet.key);
     return page?.table ? page.table.xs.at(-1)! - page.table.xs[0]! : 500;
   };
-  const widthsOf = (sheet: PdfSheet) => columnWidths(sheet, sheetSettings(settings, sheet.key), tableWidthOf(sheet));
+  /** Column widths on one page of a sheet; a page with its own widths keeps them. */
+  const widthsOf = (sheet: PdfSheet, n: number) => columnWidths(sheet, pageSettings(settings, sheet.key, n).ss, tableWidthOf(sheet, n));
+  const setPageCols = (key: string, n: number, w: number[]) => setSheet(key, { pageColWeights: { ...sheetSettings(settings, key).pageColWeights, [String(n)]: w } });
 
   const dragBase = useRef<{ key: string; widths: number[] } | null>(null);
   const rowBase = useRef<{ key: string; h: number } | null>(null);
-  const dragCol = (key: string, boundary: number, _start: number, dx: number) => {
+  const dragCol = (key: string, n: number, boundary: number, _start: number, dx: number) => {
     const sheet = sheets?.find((s) => s.key === key);
     if (!sheet) return;
     // Widths are taken once at the start of a drag, so the change follows the pointer.
-    const base = dragBase.current?.key === `${key}:${boundary}` ? dragBase.current.widths : widthsOf(sheet);
-    dragBase.current = { key: `${key}:${boundary}`, widths: base };
+    const id = `${key}#${n}:${boundary}`;
+    const base = dragBase.current?.key === id ? dragBase.current.widths : widthsOf(sheet, n);
+    dragBase.current = { key: id, widths: base };
     const w = [...base];
     const min = 14;
     const d = Math.max(min - w[boundary]!, Math.min(w[boundary + 1]! - min, dx));
     w[boundary] = w[boundary]! + d;
     w[boundary + 1] = w[boundary + 1]! - d;
-    setSheet(key, { colWeights: w });
+    setPageCols(key, n, w);
   };
   useEffect(() => {
     const clear = () => {
@@ -496,7 +530,7 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
                   />
                   <Num
                     label="Row height (pt)"
-                    value={selRowHeight ?? settings.minRowHeight}
+                    value={selRowHeight ?? pageStyle.minRowHeight}
                     min={6}
                     max={300}
                     onChange={(v) => setSheet(selSheet.key, { rowHeights: { ...selSettings.rowHeights, [String(selection.index)]: v } })}
@@ -522,54 +556,68 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
                   <p className="truncate text-xs text-gray-500">Column {selection.index + 1}: {selSheet.columns[selection.index]?.header}</p>
                   <Num
                     label="Width (pt)"
-                    value={widthsOf(selSheet)[selection.index] ?? 0}
+                    value={widthsOf(selSheet, selection.page ?? 1)[selection.index] ?? 0}
                     min={14}
                     max={800}
                     step={1}
                     onChange={(v) => {
-                      const w = widthsOf(selSheet);
+                      const n = selection.page ?? 1;
+                      const w = widthsOf(selSheet, n);
                       w[selection.index] = v;
-                      setSheet(selSheet.key, { colWeights: w });
+                      setPageCols(selSheet.key, n, w);
                     }}
                   />
                 </>
               )}
-              <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => setSheet(selSheet.key, { colWeights: undefined, rowHeights: undefined, bold: undefined, title: undefined, cells: undefined, note: undefined })}>
+              <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => setSheet(selSheet.key, { colWeights: undefined, pageColWeights: undefined, rowHeights: undefined, bold: undefined, title: undefined, cells: undefined, note: undefined })}>
                 <RotateCcw className="h-3 w-3" aria-hidden />
                 Reset this sheet’s text, rows and columns
               </button>
             </Section>
           )}
 
+          {active && (
+            <div className="border-b border-gray-200 bg-blue-50 px-4 py-2 text-xs text-blue-900">
+              <p>
+                The settings below change only <strong>{activeName}</strong>. Click another page to change that one.
+              </p>
+              {pageChanged && (
+                <button type="button" className="btn-ghost mt-1 h-7 px-2 text-xs" onClick={resetPage}>
+                  <RotateCcw className="h-3 w-3" aria-hidden />
+                  Undo this page’s changes
+                </button>
+              )}
+            </div>
+          )}
           <Section title="Text size (pt)">
-            <Num label="Letterhead" value={settings.letterheadSize} min={5} max={24} step={0.1} onChange={(v) => set({ letterheadSize: v })} />
-            <Num label="Project name" value={settings.projectSize} min={5} max={24} step={0.1} onChange={(v) => set({ projectSize: v })} />
-            <Num label="Sheet title" value={settings.titleSize} min={5} max={24} step={0.1} onChange={(v) => set({ titleSize: v })} />
-            <Num label="Column headings" value={settings.headerSize} min={4} max={16} step={0.1} onChange={(v) => set({ headerSize: v })} />
-            <Num label="Table text" value={settings.bodySize} min={4} max={16} step={0.1} onChange={(v) => set({ bodySize: v })} />
-            <Num label="Line spacing" value={settings.lineSpacing} min={1} max={2.5} step={0.05} onChange={(v) => set({ lineSpacing: v })} />
+            <Num label="Letterhead" value={pageStyle.letterheadSize} min={5} max={24} step={0.1} onChange={(v) => setPage({ letterheadSize: v })} />
+            <Num label="Project name" value={pageStyle.projectSize} min={5} max={24} step={0.1} onChange={(v) => setPage({ projectSize: v })} />
+            <Num label="Sheet title" value={pageStyle.titleSize} min={5} max={24} step={0.1} onChange={(v) => setPage({ titleSize: v })} />
+            <Num label="Column headings" value={pageStyle.headerSize} min={4} max={16} step={0.1} onChange={(v) => setPage({ headerSize: v })} />
+            <Num label="Table text" value={pageStyle.bodySize} min={4} max={16} step={0.1} onChange={(v) => setPage({ bodySize: v })} />
+            <Num label="Line spacing" value={pageStyle.lineSpacing} min={1} max={2.5} step={0.05} onChange={(v) => setPage({ lineSpacing: v })} />
           </Section>
 
           <Section title="Lines and borders">
             <label className="flex items-center justify-between gap-3 text-[13px] text-gray-700">
               <span>Borders</span>
-              <select className="input h-7 w-36 text-xs" value={settings.borders} onChange={(ev) => set({ borders: ev.target.value as BorderStyle })}>
+              <select className="input h-7 w-36 text-xs" value={pageStyle.borders} onChange={(ev) => setPage({ borders: ev.target.value as BorderStyle })}>
                 <option value="grid">Full grid</option>
                 <option value="rows">Row lines only</option>
                 <option value="outer">Outer box only</option>
                 <option value="none">None</option>
               </select>
             </label>
-            <Num label="Inner line weight (pt)" value={settings.innerLine} min={0} max={3} step={0.04} onChange={(v) => set({ innerLine: v })} />
-            <Num label="Outer line weight (pt)" value={settings.outerLine} min={0} max={4} step={0.04} onChange={(v) => set({ outerLine: v })} />
-            <Check label="Shade the heading row" checked={settings.headerFill} onChange={(v) => set({ headerFill: v })} />
+            <Num label="Inner line weight (pt)" value={pageStyle.innerLine} min={0} max={3} step={0.04} onChange={(v) => setPage({ innerLine: v })} />
+            <Num label="Outer line weight (pt)" value={pageStyle.outerLine} min={0} max={4} step={0.04} onChange={(v) => setPage({ outerLine: v })} />
+            <Check label="Shade the heading row" checked={pageStyle.headerFill} onChange={(v) => setPage({ headerFill: v })} />
           </Section>
 
           <Section title="Rows and cells">
-            <Num label="Minimum row height (pt)" value={settings.minRowHeight} min={4} max={60} step={0.25} onChange={(v) => set({ minRowHeight: v })} />
-            <Num label="Cell padding (pt)" value={settings.cellPadding} min={0} max={12} step={0.2} onChange={(v) => set({ cellPadding: v })} />
-            <Check label="Justify descriptions" checked={settings.justify} onChange={(v) => set({ justify: v })} />
-            <Check label="Repeat headings on every page" checked={settings.repeatHeader} onChange={(v) => set({ repeatHeader: v })} />
+            <Num label="Minimum row height (pt)" value={pageStyle.minRowHeight} min={4} max={60} step={0.25} onChange={(v) => setPage({ minRowHeight: v })} />
+            <Num label="Cell padding (pt)" value={pageStyle.cellPadding} min={0} max={12} step={0.2} onChange={(v) => setPage({ cellPadding: v })} />
+            <Check label="Justify descriptions" checked={pageStyle.justify} onChange={(v) => setPage({ justify: v })} />
+            <Check label="Repeat headings on every page" checked={pageStyle.repeatHeader} onChange={(v) => setPage({ repeatHeader: v })} />
             <p className="text-xs text-gray-500">On the page: click a row or a heading to select it, double-click any cell or heading to edit its text, drag a line between columns or under a row to resize.</p>
           </Section>
 
@@ -581,18 +629,14 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
                 <option value="a4">A4</option>
               </select>
             </label>
-            <Num label="Left and right margins (mm)" value={settings.marginMm} min={2} max={40} step={0.5} onChange={(v) => set({ marginMm: v })} />
-            <Num label="Top margin (mm)" value={settings.topMm} min={2} max={40} step={0.5} onChange={(v) => set({ topMm: v })} />
-            <Num label="Bottom margin (mm)" value={settings.bottomMm} min={2} max={40} step={0.5} onChange={(v) => set({ bottomMm: v })} />
+            <Num label="Left and right margins (mm)" value={pageStyle.marginMm} min={2} max={40} step={0.5} onChange={(v) => setPage({ marginMm: v })} />
+            <Num label="Top margin (mm)" value={pageStyle.topMm} min={2} max={40} step={0.5} onChange={(v) => setPage({ topMm: v })} />
+            <Num label="Bottom margin (mm)" value={pageStyle.bottomMm} min={2} max={40} step={0.5} onChange={(v) => setPage({ bottomMm: v })} />
             <Check label="Page numbers" checked={settings.pageNumbers} onChange={(v) => set({ pageNumbers: v })} />
-            <Check label="Project name under the letterhead" checked={settings.showNotes} onChange={(v) => set({ showNotes: v })} />
+            <Check label="Project name under the letterhead" checked={pageStyle.showNotes} onChange={(v) => setPage({ showNotes: v })} />
             <label className="block text-[13px] text-gray-700">
               Letterhead (one line each)
-              <textarea className="input mt-1" rows={2} value={settings.letterhead.join('\n')} onChange={(ev) => set({ letterhead: ev.target.value.split('\n') })} />
-            </label>
-            <label className="block text-[13px] text-gray-700">
-              Signatures under the abstracts (one per line)
-              <textarea className="input mt-1" rows={3} value={settings.signatures.join('\n')} onChange={(ev) => set({ signatures: ev.target.value.split('\n').filter((x, i, a) => x.trim() || i < a.length - 1) })} />
+              <textarea className="input mt-1" rows={2} value={pageStyle.letterhead.join('\n')} onChange={(ev) => setPage({ letterhead: ev.target.value.split('\n') })} />
             </label>
           </Section>
 
@@ -638,7 +682,9 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
                       <ChevronDown className="h-3.5 w-3.5" aria-hidden />
                     </button>
                   </div>
-                  <PageView page={p} zoom={zoom} selection={selection} onSelect={setSelection} onDragCol={dragCol} onDragRow={dragRow} />
+                  <div className={active && pageKey(active) === pageKey(p) ? 'ring-2 ring-blue-500 ring-offset-2' : ''}>
+                    <PageView page={p} zoom={zoom} selection={selection} onSelect={setSelection} onActivate={setActiveKey} onDragCol={dragCol} onDragRow={dragRow} />
+                  </div>
                 </div>
               ))}
             </div>
