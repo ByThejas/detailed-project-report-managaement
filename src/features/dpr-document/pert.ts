@@ -191,13 +191,22 @@ export function pertMilestones(p: PertPlan): { month: number; label: string }[] 
 
 /** Problems that make the chart wrong: stages past the completion period, or nothing scheduled. */
 export function pertProblems(p: PertPlan): string[] {
-  const out: string[] = [];
+  return pertProblemItems(p).map((x) => x.text);
+}
+
+/** The PERT problems with where each is fixed on the PERT step and how. */
+export function pertProblemItems(p: PertPlan): { text: string; target: string; how: string }[] {
+  const out: { text: string; target: string; how: string }[] = [];
   const work = p.activities.filter((a) => !a.preAward);
-  if (!work.length) out.push('no stages after award');
-  if (!(p.completionMonths > 0)) out.push('completion period');
+  if (!work.length) out.push({ text: 'no stages after award', target: 'pert:activities', how: 'Add at least one stage that is not “Pre-award” (e.g. supply, erection, commissioning), or pick a standard schedule from “Start from a standard schedule” at the top.' });
+  if (!(p.completionMonths > 0)) out.push({ text: 'completion period', target: 'pert:completion', how: 'Type the completion period in months (e.g. 6 for an augmentation, 12 for a new station).' });
   const end = Math.max(0, ...work.map((a) => a.start + a.months));
-  if (end > p.completionMonths) out.push(`stages run to M${end}, past the ${p.completionMonths}-month completion period`);
-  for (const a of p.activities) if (!a.name.trim() || !(a.months > 0)) out.push(`activity "${a.name || 'unnamed'}" needs a name and a duration`);
+  if (end > p.completionMonths) {
+    out.push({ text: `stages run to M${end}, past the ${p.completionMonths}-month completion period`, target: 'pert:completion', how: `Either raise the completion period to ${end} months, or shorten or start earlier the stages that end after M${p.completionMonths}.` });
+  }
+  p.activities.forEach((a, i) => {
+    if (!a.name.trim() || !(a.months > 0)) out.push({ text: `activity "${a.name || 'unnamed'}" needs a name and a duration`, target: `pert:activity:${i}`, how: `Give activity ${i + 1} a name and a duration of at least 1 month, or remove it.` });
+  });
   return out;
 }
 

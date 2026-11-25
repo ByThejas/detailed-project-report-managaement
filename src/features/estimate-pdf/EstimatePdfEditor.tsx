@@ -9,6 +9,7 @@ import { DEFAULT_PDF_SETTINGS, PAPER, SHEET_TITLES, defaultOrientation, heading,
 import { approxMeasure, columnWidths, layout, orderSheets, pageKey, sheetSettings, type Measure, type Page } from './layout';
 import { FONT_FILES, PREVIEW_FONT, downloadPdf, loadFonts } from './renderPdf';
 import { sheetsFromFile, sheetsFromWorkbook, type PdfSheet } from './sheets';
+import { settingsKey } from './estimatePdfBytes';
 
 /** A row (with the clicked cell's column) or a column heading. */
 type Selection = { sheet: string; kind: 'row' | 'col'; index: number; col?: number } | null;
@@ -16,7 +17,6 @@ type Selection = { sheet: string; kind: 'row' | 'col'; index: number; col?: numb
 const CELL_EDITOR = 'pdf-cell-text';
 const focusCellEditor = () => requestAnimationFrame(() => document.getElementById(CELL_EDITOR)?.focus());
 
-const settingsKey = (dprId: string) => `dpr-estimate-pdf:${dprId}`;
 
 /** The preview draws with the same font files as the PDF. */
 const fontUrl = (f: string) => `${import.meta.env.BASE_URL ?? '/'}${f}`;

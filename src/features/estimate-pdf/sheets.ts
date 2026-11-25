@@ -25,6 +25,8 @@ export interface PdfSheet {
   notes: string[];
   columns: PdfColumn[];
   rows: PdfRow[];
+  /** Column widths to print in proportion to (a workbook sheet printed as the Excel has it), instead of KPTCL's standard widths. */
+  weights?: number[];
 }
 
 /** Sheets that are not part of the abstract and estimate (BCR, cost-benefit, PERT) are left out. */
@@ -116,6 +118,7 @@ export function sheetFromWorksheet(ws: Worksheet): PdfSheet | null {
   const qtyCol = headers.findIndex((h) => /^qty|quantity/i.test(h));
 
   const rows: PdfRow[] = [];
+  const hasQty: boolean[] = [];
   const numericCount = new Array<number>(width).fill(0);
   const filledCount = new Array<number>(width).fill(0);
   for (let r = headerAt + 1; r <= last; r++) {
@@ -123,8 +126,10 @@ export function sheetFromWorksheet(ws: Worksheet): PdfSheet | null {
     const cells = Array.from({ length: width }, (_, i) => row.getCell(i + 1));
     const texts = cells.map(cellText);
     if (texts.every((t) => !t)) break;
-    // Item rows (they carry a code in the first column) with no quantity are left out, as in the Excel download.
-    if (qtyCol > 0 && texts[0] && !texts[qtyCol]) continue;
+    // Item rows (a code and a unit) with no quantity are left out, as in the Excel download. A heading row (a Sl. No.
+    // and its text, no unit) is printed, so the numbering reads as in the uploaded estimate.
+    const unitCol = headers.findIndex((h) => /^unit$/i.test(h.trim()));
+    if (qtyCol > 0 && texts[0] && !texts[qtyCol] && (unitCol < 0 || texts[unitCol])) continue;
     cells.forEach((c, i) => {
       if (texts[i]) {
         filledCount[i]!++;
@@ -133,7 +138,13 @@ export function sheetFromWorksheet(ws: Worksheet): PdfSheet | null {
     });
     const total = qtyCol > 0 && !texts[0] && !texts[qtyCol] && !!texts[1];
     rows.push({ cells: texts, bold: cells.some((c) => c.font?.bold) || !!row.font?.bold, ...(total ? { total } : {}) });
+    hasQty.push(qtyCol > 0 && !!texts[qtyCol]);
   }
+  // Closing rows come after the last item: a label with no Sl. No. above an item is a sub-heading, not a total.
+  const lastItem = hasQty.lastIndexOf(true);
+  rows.forEach((r, i) => {
+    if (r.total && i < lastItem) delete r.total;
+  });
 
   const columns: PdfColumn[] = headers.map((h, i) => ({
     header: h,

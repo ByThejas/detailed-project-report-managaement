@@ -3,15 +3,18 @@ import { CheckCircle2, ListChecks, TriangleAlert, X } from 'lucide-react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { formatNumber } from '@/lib/format';
 import { isMultiRate, type EstimateLine } from '@/features/preparation/types';
-import { openErrors, warningsOf } from './parse';
+import { effectiveRate } from '@/features/preparation/calc';
+import { itemAmount, openErrors, warningsOf } from './parse';
 import { planImport, sectionLabel, sectionOfItem, toEstimateLine, type ImportMode, type ImportPlan } from './toEstimateLine';
 import { catalogName, useRateCatalog } from '@/features/rates/catalog';
 import { applySuggestion, certainMatch, differsFromRate, type RateSuggestion } from '@/features/rates/match';
 import type { BoqReadResult, ParsedItem } from './types';
 
 const amount = (n: number) => formatNumber(Math.round(n * 100) / 100);
-/** Quantity × rate, the way the estimate works it out; blank until both are known. */
-const times = (qty: number | null, rate: number | null | undefined) => (qty != null && Number.isFinite(qty) && rate ? qty * rate : null);
+type Kind = 'supply' | 'erection' | 'testing';
+/** The row's amount the way the estimate will show it: the file's own amount, else qty × rate; blank until both are known. */
+const amountOfRow = (i: Pick<ParsedItem, 'qty' | 'supplyRate' | 'erectionRate' | 'testingRate' | 'fileAmounts'>, kind: Kind) =>
+  i.qty != null && Number.isFinite(i.qty) && (i[`${kind}Rate`] || i.fileAmounts?.[kind]) ? itemAmount(i, kind) : null;
 
 export type { ImportMode };
 
@@ -27,7 +30,7 @@ interface BoqReviewProps {
  * Shows every item read from a BOQ workbook next to its source row. Nothing reaches the estimate
  * until every included row is either clean, fixed, or explicitly confirmed.
  */
-const sumOf = (items: Pick<ParsedItem, 'qty' | 'supplyRate' | 'erectionRate' | 'testingRate'>[], rate: 'supplyRate' | 'erectionRate' | 'testingRate') => items.reduce((t, i) => t + (times(i.qty, i[rate]) ?? 0), 0);
+const sumOf = (items: Pick<ParsedItem, 'qty' | 'supplyRate' | 'erectionRate' | 'testingRate' | 'fileAmounts'>[], kind: Kind) => items.reduce((t, i) => t + (amountOfRow(i, kind) ?? 0), 0);
 
 /** How a row stands against the checks and the rate catalog, for the filter. */
 type RowStatus = 'fine' | 'attention' | 'unmatched';
@@ -52,8 +55,11 @@ export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewP
   const [bulkMode, setBulkMode] = useState<ImportMode>('replace');
   const [promoted, setPromoted] = useState<Set<string>>(new Set());
   const [withCharges, setWithCharges] = useState(true);
-  const [useSor, setUseSor] = useState(true);
-  // The rate catalog kept in the Rate Catalog page is the rate source: each row's rate is set beside the SoR item it surely is.
+  // The uploaded estimate's own rates and amounts are what get imported, always. The rate catalog only fills rows that
+  // have no rate at all, and only when asked (on by default for a BOQ of quantities only, which has no rates to keep).
+  const fileHasRates = read.items.some((i) => i.supplyRate > 0 || i.erectionRate > 0 || i.testingRate > 0);
+  const [useSor, setUseSor] = useState(!fileHasRates);
+  // The rate catalog kept in the Rate Catalog page is shown beside each row it surely is, for information.
   const { catalog, index } = useRateCatalog();
   const sorName = catalogName(catalog);
 
@@ -108,21 +114,23 @@ export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewP
   }, [index, items, read]);
   const sorDiffers = (i: ParsedItem) => {
     const m = sorOf.get(i.id);
-    return Boolean(m && i.supplyRate > 0 && differsFromRate(m.supplyRate, toEstimateLine(i, read).supplyRate));
+    return Boolean(m && i.supplyRate > 0 && differsFromRate(m.supplyRate, effectiveRate(toEstimateLine(i, read), 'supply')));
   };
   const differing = included.filter(sorDiffers);
   /** A row with no rate in the file (a BOQ of quantities only) that is surely an SoR item takes the SoR's rates. */
   const sorFills = (i: ParsedItem) => sorOf.has(i.id) && !(i.supplyRate > 0) && !(i.erectionRate > 0) && !(i.testingRate > 0);
   const filling = included.filter(sorFills);
-  const sorApplies = (i: ParsedItem) => sorDiffers(i) || sorFills(i);
-  const applying = [...differing, ...filling];
-  /** The rates the row will be imported at: the file's, or the SoR's when it differs or is missing and "use SoR" is on. */
+  // A rate written in the file is never replaced: only a row with no rate at all can take the SoR's.
+  const sorApplies = (i: ParsedItem) => sorFills(i);
+  /** The rates the row will be imported at: the file's, or the SoR's when the file has none and "use SoR" is on. */
   const ratesOf = (i: ParsedItem) => {
     if (!useSor || !sorApplies(i)) return i;
     const l = applySuggestion(toEstimateLine(i, read), sorOf.get(i.id)!).line;
     return { qty: i.qty, supplyRate: l.supplyRate, erectionRate: l.erectionRate, testingRate: l.testingRate };
   };
-  /** The import of these rows, at the SoR rate where it differs or is missing and "use SoR" is on. */
+  /** The row as it will be imported, with the file's amounts unless the SoR fills its rates. */
+  const rowFor = (i: ParsedItem): Pick<ParsedItem, 'qty' | 'supplyRate' | 'erectionRate' | 'testingRate' | 'fileAmounts'> => (useSor && sorApplies(i) ? ratesOf(i) : i);
+  /** The import of these rows, at the file's rates; rows with no rate take the SoR's when "use SoR" is on. */
   const planFor = (rows: ParsedItem[]): ImportPlan => {
     const filePlan = planImport(read, rows, sheets, withCharges);
     const sorRows = useSor ? rows.filter(sorApplies) : [];
@@ -233,7 +241,7 @@ export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewP
             )}
           </div>
         )}
-        {filling.length > 0 && differing.length === 0 && (
+        {filling.length > 0 && (
           <div role="status" aria-label="Rows priced from the SoR" className="rounded-md border border-emerald-200 bg-emerald-50 px-3 py-2 text-emerald-900">
             <p className="font-medium">
               {filling.length} {filling.length === 1 ? 'row has' : 'rows have'} no rate in the file and {filling.length === 1 ? 'is' : 'are'} surely an SoR item ({sorName}).
@@ -245,14 +253,9 @@ export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewP
           </div>
         )}
         {differing.length > 0 && (
-          <div role="status" aria-label="Rates that differ from the SoR" className="rounded-md border border-rose-200 bg-rose-50 px-3 py-2 text-rose-900">
-            {filling.length > 0 && (
-              <p className="mb-1">
-                {filling.length} {filling.length === 1 ? 'row has' : 'rows have'} no rate in the file and will take the SoR rate too.
-              </p>
-            )}
+          <div role="status" aria-label="Rates that differ from the SoR" className="rounded-md border border-gray-200 bg-gray-50 px-3 py-2 text-gray-800">
             <p className="font-medium">
-              {differing.length} {differing.length === 1 ? 'supply rate in the file differs' : 'supply rates in the file differ'} from the SoR ({sorName}):
+              {differing.length} {differing.length === 1 ? 'supply rate in the file differs' : 'supply rates in the file differ'} from the SoR ({sorName}). The file’s rates are imported as they are; this is for information only.
             </p>
             <ul className="mt-1 list-disc space-y-0.5 pl-5">
               {differing.slice(0, 6).map((i) => (
@@ -262,10 +265,6 @@ export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewP
               ))}
               {differing.length > 6 && <li>…and {differing.length - 6} more.</li>}
             </ul>
-            <label className="mt-1.5 flex items-center gap-1.5">
-              <input type="checkbox" checked={useSor} onChange={(e) => setUseSor(e.target.checked)} />
-              Import {differing.length === 1 ? 'it' : 'them'} at the SoR rate (supply, and erection/T&amp;C where the SoR has them per {differing.length === 1 ? 'its' : 'their'} unit)
-            </label>
           </div>
         )}
         <div className="flex flex-wrap items-center gap-2" role="group" aria-label="Show rows">
@@ -314,7 +313,7 @@ export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewP
           <p className="mt-1.5 text-xs text-gray-500">
             “Import all” takes every row with a quantity and description, with its warnings taken as checked
             {withErrors.length > 0 ? `; ${withErrors.length} ${withErrors.length === 1 ? 'row' : 'rows'} with no quantity or description ${withErrors.length === 1 ? 'is' : 'are'} left out` : ''}. “Matching the rate catalog” takes only the rows shown as Fine: surely a {sorName} item at the same rate, or with no rate in the file and priced from it.
-            {useSor && applying.length > 0 ? ` Rows whose rate differs from ${sorName} come in at its rate.` : ''}
+            {' '}Every rate and amount comes in exactly as in the file{useSor && filling.length > 0 ? `; rows with no rate in the file take the ${sorName} rate` : ''}.
           </p>
         </div>
       </div>
@@ -392,13 +391,13 @@ export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewP
                       </span>
                     )}
                   </td>
-                  <AmountCell value={times(i.qty, ratesOf(i).supplyRate)} />
+                  <AmountCell value={amountOfRow(rowFor(i), 'supply')} />
                   {electrical && (
                     <>
                       <td className="num px-2 py-2 text-right text-gray-700">{i.erectionRate ? amount(i.erectionRate) : '—'}</td>
-                      <AmountCell value={times(i.qty, ratesOf(i).erectionRate)} />
+                      <AmountCell value={amountOfRow(rowFor(i), 'erection')} />
                       <td className="num px-2 py-2 text-right text-gray-700">{i.testingRate ? amount(i.testingRate) : '—'}</td>
-                      <AmountCell value={times(i.qty, ratesOf(i).testingRate)} />
+                      <AmountCell value={amountOfRow(rowFor(i), 'testing')} />
                     </>
                   )}
                   <td className="px-2 py-2 pr-4 text-xs">
@@ -437,13 +436,13 @@ export function BoqReview({ read, currentLines, onCancel, onImport }: BoqReviewP
                 <td colSpan={7} className="py-2 pl-4 pr-2 text-right">
                   Total of the {included.length} rows to import
                 </td>
-                <td className="num px-2 py-2 text-right">{amount(sumOf(included.map(ratesOf), 'supplyRate'))}</td>
+                <td className="num px-2 py-2 text-right">{amount(sumOf(included.map(rowFor), 'supply'))}</td>
                 {electrical && (
                   <>
                     <td />
-                    <td className="num px-2 py-2 text-right">{amount(sumOf(included.map(ratesOf), 'erectionRate'))}</td>
+                    <td className="num px-2 py-2 text-right">{amount(sumOf(included.map(rowFor), 'erection'))}</td>
                     <td />
-                    <td className="num px-2 py-2 text-right">{amount(sumOf(included.map(ratesOf), 'testingRate'))}</td>
+                    <td className="num px-2 py-2 text-right">{amount(sumOf(included.map(rowFor), 'testing'))}</td>
                   </>
                 )}
                 <td />

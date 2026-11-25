@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { sampleStore } from '@/lib/sampleStore';
+import { putFiles } from '@/lib/fileStore';
 import type { EstimateSection } from '@/features/preparation/types';
 import { isReadableBoq, readBoqWorkbook } from './readWorkbook';
 import type { BoqReadResult } from './types';
@@ -49,6 +50,8 @@ export function useReadBoqFiles(dprId: string) {
         }
         const read = await readBoqWorkbook(await fileBuffer(file), file.name, section);
         sampleStore.saveBoqRead(dprId, docKey, read);
+        // The workbook itself is kept too: the final DPR prints its other sheets (annexures, compensation …).
+        if (!read.failure) await putFiles(dprId, docKey, [file]).catch(() => undefined);
         results.push(read);
       }
       return { results, unreadable };

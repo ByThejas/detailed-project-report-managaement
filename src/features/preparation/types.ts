@@ -45,6 +45,31 @@ export interface EstimateLine {
   srCode?: string;
   /** Headings the line sits under in the BOQ ("Fabrication and supply of towers"), used only to match it to the rate catalog. */
   group?: string;
+  /**
+   * The amounts an uploaded estimate states for this line, with the quantity and rate they were stated at. The file's
+   * amount is not always qty × rate: a structure's erection is Rs 5,723 per MT × its weight, a transformer move is
+   * Rs 80 × tonnes × km, and amounts are often rounded. The line keeps the file's rate and shows the file's amount;
+   * see lineAmounts.
+   */
+  fileAmounts?: Partial<Record<RateKind, FileAmount>>;
+  /**
+   * Heading rows an uploaded estimate prints straight above this line, with their Sl. No. as written ("A1 | CIRCUIT
+   * BREAKER …", then "A) Tower type …"). The screen, the Excel download and the PDF print them above the line, so the
+   * numbering reads as in the file.
+   */
+  headings?: LineHeading[];
+}
+
+export interface LineHeading {
+  code: string;
+  text: string;
+}
+
+export type RateKind = 'supply' | 'erection' | 'testing';
+export interface FileAmount {
+  qty: number;
+  rate: number;
+  amount: number;
 }
 
 export interface Estimate {

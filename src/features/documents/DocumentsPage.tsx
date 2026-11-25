@@ -9,15 +9,15 @@ import { DprSummaryHeader } from '@/features/dprs/DprSummaryHeader';
 import { useActiveDpr } from '@/features/dprs/useActiveDpr';
 import { useToast } from '@/lib/toast';
 import { useDprDocuments, useUpdateDocuments } from './api';
-import { DOCUMENT_GROUPS, pdfOnly } from './catalog';
+import { DOCUMENT_GROUPS } from './catalog';
 import { DocumentTable } from './DocumentTable';
 import { RequestDraftsCard } from './RequestDraftsCard';
-import { deleteFile, putFiles } from '@/lib/fileStore';
-import { addExtraDocument, addFiles, canSubmit, changesSinceSubmit, extraSpecs, filesOf, countStatuses, missingMandatory, removeExtraDocument, removeFile, setNotApplicable, submit } from './state';
+import { deleteFile } from '@/lib/fileStore';
+import { useAttachFiles } from './useAttach';
+import { addExtraDocument, canSubmit, changesSinceSubmit, extraSpecs, filesOf, countStatuses, missingMandatory, removeExtraDocument, removeFile, setNotApplicable, submit } from './state';
 import { AddDocumentForm } from './AddDocumentForm';
 import { EMPTY_DOCUMENTS } from './types';
 
-const MAX_FILE_BYTES = 25 * 1024 * 1024;
 
 function SummaryStrip({ counts }: { counts: ReturnType<typeof countStatuses> }) {
   const items = [
@@ -65,22 +65,7 @@ export function DocumentsPage() {
     setDpr(id);
   };
 
-  const attach = (spec: { key: string; name: string }, picked: File[]) => {
-    let files = picked;
-    const notPdf = pdfOnly(spec.key) ? files.filter((f) => !/\.pdf$/i.test(f.name)) : [];
-    if (notPdf.length) toast({ title: 'PDF only', description: `${spec.name} takes the BOQ PDF as received. Upload the estimated BOQ workbook in DPR Preparation, Estimate tab. Skipped: ${notPdf.map((f) => f.name).join(', ')}.`, tone: 'error' });
-    files = files.filter((f) => !notPdf.includes(f));
-    const tooBig = files.filter((f) => f.size > MAX_FILE_BYTES);
-    const ok = files.filter((f) => f.size <= MAX_FILE_BYTES);
-    if (tooBig.length) toast({ title: 'File too large', description: `${tooBig.map((f) => f.name).join(', ')} is over 25 MB.`, tone: 'error' });
-    if (!ok.length) return;
-    const added = ok.map((f) => ({ name: f.name, size: f.size, addedAt: new Date().toISOString() }));
-    // Keep the files themselves in this browser, for the printed DPR pack.
-    void putFiles(activeId, spec.key, ok);
-    update.mutate((d) => addFiles(d, spec.key, added), {
-      onSuccess: () => toast({ title: `${ok.length === 1 ? 'File' : `${ok.length} files`} added`, description: spec.name }),
-    });
-  };
+  const attach = useAttachFiles(activeId);
 
   const remove = (spec: { key: string }, index: number) => {
     const name = filesOf(docs, spec.key)[index]?.name;

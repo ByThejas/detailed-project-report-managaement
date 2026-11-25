@@ -1,3 +1,4 @@
+import { flushEstimateSaves } from '@/features/preparation/api';
 import '@testing-library/jest-dom/vitest';
 
 /**
@@ -53,4 +54,8 @@ try {
   } as typeof Request;
 }
 
-beforeEach(() => window.localStorage.clear());
+beforeEach(() => {
+  // A save still waiting from the last test must not land in this one's storage.
+  flushEstimateSaves();
+  window.localStorage.clear();
+});

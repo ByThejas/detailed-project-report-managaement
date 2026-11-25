@@ -32,7 +32,7 @@ export function LoadDataCard({ dpr, e, onChange }: { dpr: DprRow; e: Estimate; o
   };
 
   return (
-    <Card role="region" aria-labelledby="load-title">
+    <Card role="region" aria-labelledby="load-title" data-fix="load">
       <CardHeader id="load-title" title="Load data" subtitle="From the Transformer & Feeder Load Details. Loading factor = peak MW ÷ (MVA × power factor)." />
       <div className="grid gap-x-3 gap-y-3 px-4 py-3 text-[13px] sm:grid-cols-4">
         <label className="row-span-3 grid grid-rows-subgrid gap-y-1">

@@ -104,7 +104,7 @@ export function sheetSettings(s: PdfSettings, key: string): SheetSettings {
 
 /** Column widths in points that fill the table width, from the user's weights or KPTCL's standard widths. */
 export function columnWidths(sheet: PdfSheet, ss: SheetSettings, tableWidth: number): number[] {
-  const weights = ss.colWeights?.length === sheet.columns.length ? ss.colWeights : standardWidths(sheet.columns.map((c) => c.header), tableWidth);
+  const weights = ss.colWeights?.length === sheet.columns.length ? ss.colWeights : sheet.weights?.length === sheet.columns.length ? sheet.weights : standardWidths(sheet.columns.map((c) => c.header), tableWidth);
   const sum = weights.reduce((a, b) => a + Math.max(b, 0.1), 0);
   return weights.map((w) => (Math.max(w, 0.1) / sum) * tableWidth);
 }

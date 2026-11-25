@@ -1,0 +1,9 @@
+Fonts used by the printable cover, PERT chart and BCR pages (src/features/dpr-document/sheets).
+Taken from the KPTCL cover generator, PERT chart generator and BCR calculator templates, which embed
+these Google Fonts subsets (latin and latin-ext):
+
+  IBM Plex Sans, IBM Plex Mono, IBM Plex Serif  - Copyright IBM Corp.
+  Archivo                                        - Copyright The Archivo Project Authors
+
+All are licensed under the SIL Open Font License, Version 1.1 (https://openfontlicense.org).
+They may be used, embedded in documents and redistributed with this app; they may not be sold on their own.

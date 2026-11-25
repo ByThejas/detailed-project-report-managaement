@@ -15,9 +15,17 @@ export interface PackInput {
   documents: DprDocuments;
   /** Looks up an attached file's bytes; undefined when this browser doesn't have it. */
   fileOf: (docKey: string, name: string) => Promise<PackFile | undefined>;
-  /** The Word DPR saved as PDF, to go in front. Optional. */
+  /**
+   * The DPR's own pages saved as PDF from the print tab (cover, text pages, PERT chart, BCR). A Word DPR
+   * saved as PDF also works; it then goes in front as it is.
+   */
   front?: ArrayBuffer;
-  runningTitle?: string;
+  /** The abstract and estimate PDF (annexure 3). */
+  estimates?: ArrayBuffer;
+  /** The estimate workbook's other sheets, when the estimate PDF was supplied as a file: they follow it, before the PERT chart. */
+  estimateExtras?: ArrayBuffer;
+  /** Whether the printed DPR ends with the two BCR pages (not for pure line works). */
+  hasBcr?: boolean;
 }
 
 export interface PackResult {
@@ -27,10 +35,9 @@ export interface PackResult {
   included: string[];
   /** Files left out, with why. */
   skipped: { name: string; why: string }[];
+  /** False when the DPR PDF wasn't the print-tab one, so it went in front unsplit. */
+  ordered: boolean;
 }
-
-/** Standard PDF fonts only cover Latin-1 and a few marks; anything else becomes '?'. */
-const safe = (t: string) => t.replace(/[^\x20-\x7E\u00A0-\u00FF\u2013\u2014\u2018\u2019\u201C\u201D\u2022\u2026]/g, '?');
 
 const A4: [number, number] = [595.28, 841.89];
 const kindOf = (f: { name: string; type: string }) => {
@@ -45,79 +52,88 @@ const kindOf = (f: { name: string; type: string }) => {
 export const ATTACHED_ANNEXURES = ANNEXURES.filter((a) => !a.generated);
 
 /**
- * Builds one print-ready PDF: the DPR (if its PDF is given), then each attached annexure behind a title
- * page, with page numbers stamped on every page. PDFs and PNG/JPEG images go in as they are; other
- * files (e.g. the BOQ workbook) are named on the title page as not included.
+ * Where the parts of the printed DPR are: page 1 is the A4 cover, then the Letter text pages, then the
+ * landscape PERT chart and (unless exempt) the two landscape BCR pages. Null when the PDF isn't laid out so.
+ */
+export function splitPrinted(sizes: { width: number; height: number }[], hasBcr: boolean): { cover: number[]; text: number[]; pert: number[]; bcr: number[] } | null {
+  const tail = hasBcr ? 3 : 1;
+  const n = sizes.length;
+  if (n < tail + 2) return null;
+  const landscape = (i: number) => sizes[i]!.width > sizes[i]!.height;
+  const ends = Array.from({ length: tail }, (_, k) => n - tail + k);
+  if (!ends.every(landscape) || landscape(0) || landscape(n - tail - 1)) return null;
+  const range = (a: number, b: number) => Array.from({ length: b - a }, (_, k) => a + k);
+  return { cover: [0], text: range(1, n - tail), pert: [n - tail], bcr: hasBcr ? [n - 2, n - 1] : [] };
+}
+
+/**
+ * Builds the final DPR as one PDF in the Thyavanige DPR's order: cover, contents and report pages,
+ * the abstract and estimates (3) with the estimate workbook's other sheets after them, PERT chart (4), grid map (5), BCR (6), TCCM extract (7), layout and BOM
+ * (8) and the R&D earthmat report (9). Like the Thyavanige PDF it has no separator pages and no page
+ * stamps. PDFs and PNG/JPEG images go in as they are; other files are listed as left out.
  */
 export async function buildPdfPack(pdf: typeof PdfLib, input: PackInput): Promise<PackResult> {
-  const { PDFDocument, StandardFonts, rgb } = pdf;
+  const { PDFDocument } = pdf;
   const out = await PDFDocument.create();
-  out.setTitle(`DPR ${input.dpr.id}`);
-  const font = await out.embedFont(StandardFonts.Helvetica);
-  const bold = await out.embedFont(StandardFonts.HelveticaBold);
+  out.setTitle(`DPR ${input.dpr.id}: ${input.dpr.project}`);
+  out.setCreator('DPR Manager');
   const included: string[] = [];
   const skipped: { name: string; why: string }[] = [];
 
-  if (input.front) {
-    const src = await PDFDocument.load(input.front, { ignoreEncryption: true });
-    for (const p of await out.copyPages(src, src.getPageIndices())) out.addPage(p);
-  }
+  const front = input.front ? await PDFDocument.load(input.front, { ignoreEncryption: true }) : null;
+  const parts = front ? splitPrinted(front.getPages().map((p) => p.getSize()), input.hasBcr ?? true) : null;
+  const copy = async (src: PdfLib.PDFDocument, pages: number[]) => {
+    for (const p of await out.copyPages(src, pages)) out.addPage(p);
+  };
 
-  for (const a of ATTACHED_ANNEXURES) {
+  const attach = async (no: string) => {
+    const a = ATTACHED_ANNEXURES.find((x) => x.no === no);
+    if (!a) return;
     const files = a.docs.flatMap((k) => (input.documents.files[k] ?? []).map((f) => ({ key: k, name: f.name })));
-    const title = out.addPage(A4);
-    const centre = (raw: string, y: number, size: number, f = bold) => {
-      const text = safe(raw);
-      title.drawText(text, { x: (A4[0] - f.widthOfTextAtSize(text, size)) / 2, y, size, font: f });
-    };
-    centre(`ANNEXURE-${a.no}`, 520, 22);
-    centre(a.title.toUpperCase(), 488, 16);
-    const notes: string[] = [];
-    if (!files.length) notes.push('Not attached.');
     for (const f of files) {
       const stored = await input.fileOf(f.key, f.name);
       if (!stored) {
         skipped.push({ name: f.name, why: 'not stored in this browser; attach it again in Documents' });
-        notes.push(`${f.name}: not in this browser`);
         continue;
       }
       const kind = kindOf(stored);
       try {
         if (kind === 'pdf') {
           const src = await PDFDocument.load(stored.bytes, { ignoreEncryption: true });
-          for (const p of await out.copyPages(src, src.getPageIndices())) out.addPage(p);
+          await copy(src, src.getPageIndices());
         } else if (kind === 'png' || kind === 'jpg') {
           const img = kind === 'png' ? await out.embedPng(stored.bytes) : await out.embedJpg(stored.bytes);
-          const landscape = img.width > img.height;
-          const size: [number, number] = landscape ? [A4[1], A4[0]] : A4;
+          const size: [number, number] = img.width > img.height ? [A4[1], A4[0]] : A4;
           const page = out.addPage(size);
-          const s = Math.min((size[0] - 60) / img.width, (size[1] - 80) / img.height, 1);
-          page.drawImage(img, { x: (size[0] - img.width * s) / 2, y: (size[1] - img.height * s) / 2 + 10, width: img.width * s, height: img.height * s });
+          const s = Math.min((size[0] - 40) / img.width, (size[1] - 40) / img.height, 1);
+          page.drawImage(img, { x: (size[0] - img.width * s) / 2, y: (size[1] - img.height * s) / 2, width: img.width * s, height: img.height * s });
         } else {
           skipped.push({ name: f.name, why: 'not a PDF or image; save it as PDF and attach that' });
-          notes.push(`${f.name}: not included (save as PDF to include it)`);
           continue;
         }
         included.push(f.name);
       } catch {
         skipped.push({ name: f.name, why: 'could not be read (damaged or protected file)' });
-        notes.push(`${f.name}: could not be read`);
       }
     }
-    notes.forEach((n, i) => centre(n, 440 - i * 16, 10, font));
+  };
+
+  if (front && parts) await copy(front, [...parts.cover, ...parts.text]);
+  else if (front) await copy(front, front.getPageIndices());
+  if (input.estimates) {
+    const est = await PDFDocument.load(input.estimates, { ignoreEncryption: true });
+    await copy(est, est.getPageIndices());
   }
+  if (input.estimateExtras) {
+    const more = await PDFDocument.load(input.estimateExtras, { ignoreEncryption: true });
+    await copy(more, more.getPageIndices());
+  }
+  if (front && parts) await copy(front, parts.pert);
+  await attach('5');
+  if (front && parts) await copy(front, parts.bcr);
+  for (const no of ['7', '8', '9']) await attach(no);
 
-  const total = out.getPageCount();
-  const footer = input.runningTitle ?? input.dpr.project;
-  out.getPages().forEach((p, i) => {
-    const { width } = p.getSize();
-    const label = `Page ${i + 1} of ${total}`;
-    p.drawText(label, { x: width - 36 - font.widthOfTextAtSize(label, 8), y: 18, size: 8, font, color: rgb(0.35, 0.35, 0.35) });
-    const left = safe(`${input.dpr.id} · ${footer}`).slice(0, 110);
-    p.drawText(left, { x: 36, y: 18, size: 8, font, color: rgb(0.35, 0.35, 0.35) });
-  });
-
-  return { bytes: await out.save(), pages: total, included, skipped };
+  return { bytes: await out.save(), pages: out.getPageCount(), included, skipped, ordered: !!parts };
 }
 
 export async function downloadPdfPack(input: PackInput): Promise<PackResult> {
@@ -126,7 +142,7 @@ export async function downloadPdfPack(input: PackInput): Promise<PackResult> {
   const url = URL.createObjectURL(new Blob([r.bytes as Uint8Array<ArrayBuffer>], { type: 'application/pdf' }));
   const a = document.createElement('a');
   a.href = url;
-  a.download = `DPR_${input.dpr.id.replace(/\W+/g, '-')}_print-pack.pdf`;
+  a.download = `DPR_${input.dpr.id.replace(/\W+/g, '-')}.pdf`;
   document.body.appendChild(a);
   a.click();
   a.remove();

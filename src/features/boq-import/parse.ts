@@ -1,4 +1,5 @@
 import { formatNumber } from '@/lib/format';
+import { amountOf } from '@/features/preparation/calc';
 import type { EstimateSection } from '@/features/preparation/types';
 import type { BoqReadResult, Cell, ColumnRole, Issue, MiscRow, ParsedItem, SheetGrid, SheetSummary, SkippedRow, StatedAbstract, TotalCheck } from './types';
 
@@ -59,6 +60,12 @@ function mapColumns(labels: string[]): Partial<Record<ColumnRole, number>> {
     const role = roleOf(label);
     if (role && map[role] === undefined) map[role] = c;
   });
+  // Line sheets: "Nos | Unit Weight | TOTAL Quantity". A row with no weight leaves TOTAL Quantity blank and is
+  // priced on the count in "Nos" (61 towers × Rs 927), so that column is the quantity when TOTAL Quantity is blank.
+  if (map.totalQty !== undefined && map.qty === undefined) {
+    const count = labels.findIndex((label, c) => c < map.totalQty! && /^(nos?|numbers?|no of (towers|locations|nos))$/.test(norm(label)));
+    if (count >= 0) map.qty = count;
+  }
   return map;
 }
 
@@ -126,7 +133,8 @@ const SUB_ITEM = /^\(?([a-z]|[ivx]{1,4})\)?[.)]?$/i;
 const SUMMARY_SHEET = /abstract|abstarct|abstact|summary|cover|index|contents|\babs\b|\bgabs?\b|gab_|general\s*abs|^\s*[sd]ab\s*$|(^|[\s_])ab_/i;
 /** Sheets that work out quantities for a BOQ sheet (foundation take-offs, trenches, compensation). */
 const ANNEXURE_SHEET = /annex|calculation|calcu|\bcal|compensation|compansation|measurement|trench|\broad\b|drain|shelter|\b7th\b|sche?dule|shedule|\bpert\b|\bpag\b|face\s*sheet|facing\s*sheet|report|statu?atory/i;
-const MISC_ROW = /^(misc|unforeseen|rounding|round off)/i;
+/** "Miscellaneous", "Misc & unforeseen", and the common misspelling "Mise & unforseen". */
+const MISC_ROW = /^(misc|mise\b|mise\s*&|unfore?seen|rounding|round\s*off)/i;
 /** "1/6.907289" in a "No/MT" column: count and tonnage. */
 const NO_MT = /^\s*(\d+(?:\.\d+)?)\s*\/\s*(\d+(?:\.\d+)?)\s*$/;
 
@@ -152,7 +160,7 @@ export function kindOfSheet(name: string): 'boq' | 'abstract' | 'annexure' {
  * Only the table's own columns count: notes to the right of the table (weights, remarks) don't make it an item.
  */
 const isColumnNumbering = (cells: Cell[], columns: number[]) => {
-  const filled = columns.map((c) => text(cells[c])).filter((t) => t !== '');
+  const filled = [...new Set(columns)].sort((x, y) => x - y).map((c) => text(cells[c])).filter((t) => t !== '');
   if (filled.length < 3) return false;
   // "6=4x5" numbers a column and says how it is worked out.
   const lead = filled.map((t) => /^(\d+)(?:\.0+)?(\s*=\s*[\d\sx×*+().-]+)?$/i.exec(t));
@@ -162,6 +170,9 @@ const isColumnNumbering = (cells: Cell[], columns: number[]) => {
 };
 
 const r2 = (n: number) => Math.round(n * 100) / 100;
+/** An item's amount for one rate: the file's own amount where it states one, else qty × rate. */
+export const itemAmount = (i: Pick<ParsedItem, 'qty' | 'supplyRate' | 'erectionRate' | 'testingRate' | 'fileAmounts'>, kind: 'supply' | 'erection' | 'testing') =>
+  amountOf(i.qty ?? 0, i[`${kind}Rate`], i.fileAmounts?.[kind]);
 
 const CIVIL_ITEM = /excavat|earth\s*work|concrete|plaster|brick|masonry|reinforcement|centering|shuttering|refilling|filling|embankment|metal spreading|jelly|flooring|paint|water\s*proof|pcc|rcc|culvert|drain/i;
 const LINE_TITLE = /conductor|stringing|\blilo\b|tapped line|(2nd|second) circuit|line strengthening|strengthening of|line work|transmission line|tower/i;
@@ -237,7 +248,28 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
   if (kind === 'annexure') summary.note = 'Looks like an annexure that works out quantities for another sheet, so it starts excluded';
 
   const hidden = new Set(sheet.hiddenRows ?? []);
-  const get = (cells: Cell[], role: ColumnRole) => (col[role] === undefined ? null : (cells[col[role]!] ?? null));
+  /**
+   * A "Qty" header merged over two columns: the quantity is in either one ("Nos | t" under one "Quantity", or the
+   * count written one column to the right). The column right of Qty counts when its header cells are blank and it
+   * plays no other role.
+   */
+  const spill = (() => {
+    if (col.qty === undefined) return undefined;
+    const c = col.qty + 1;
+    if (Object.values(col).includes(c)) return undefined;
+    const headerCells = sheet.rows.slice(header.row, header.row + header.height).map((cells) => text(cells[c]));
+    return headerCells.every((t) => t === '') ? c : undefined;
+  })();
+  const get = (cells: Cell[], role: ColumnRole) => {
+    if (col[role] === undefined) return null;
+    const v = cells[col[role]!] ?? null;
+    if (role === 'qty' && spill !== undefined && text(v) === '') {
+      // A 0 there is a blank variant row (a tower type not used), not an item.
+      const next = cells[spill] ?? null;
+      return next === 0 || text(next) === '0' ? null : next;
+    }
+    return v;
+  };
   let heading = '';
   /** The last top-level heading ("A3 Fabrication and supply of towers") and the sub-heading under it ("A) Tower type DC"). */
   let groupHeading = '';
@@ -250,12 +282,18 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
   /** A total row was read since the last item. */
   let afterTotal = false;
   const seenCodes = new Map<string, ParsedItem>();
+  /** Heading rows read since the last item, printed above the next one. */
+  let pendingHeads: NonNullable<ParsedItem['headings']> = [];
+  /** A row with no quantity that the file prints as a heading: anything with a Sl. No., or a line of text that is not a note. */
+  const keepHeading = (rowNo: number, code: string, description: string) => {
+    if (code || (description && !/^\(?\s*notes?\b/i.test(description))) pendingHeads.push({ row: rowNo, code, text: description });
+  };
 
   for (let r = header.row + header.height; r < sheet.rows.length; r++) {
     const cells = sheet.rows[r] ?? [];
     const rowNo = r + 1;
     if (cells.every((c) => text(c) === '')) continue;
-    if (isColumnNumbering(cells, Object.values(col))) {
+    if (isColumnNumbering(cells, spill === undefined ? Object.values(col) : [...Object.values(col), spill])) {
       skipped.push({ sheet: sheet.name, row: rowNo, code: '', description: cells.map(text).filter(Boolean).join(' '), reason: 'Column numbering row', canInclude: false });
       continue;
     }
@@ -284,7 +322,7 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
       for (const kind of KINDS) {
         const stated = readNumber(get(cells, `${kind}Amount`), 'Total').value;
         if (stated === null) continue;
-        const itemsSum = r2(scope.reduce((s, i) => s + (i.qty ?? 0) * i[`${kind}Rate`], 0));
+        const itemsSum = r2(scope.reduce((s, i) => s + itemAmount(i, kind), 0));
         const miscAmount = grand ? misc.filter((m) => m.column === kind).reduce((s, m) => s + m.amount, 0) : miscSince[kind];
         // "Total" straight after "Sub-total" + "Miscellaneous" is the sub-total plus the misc amount.
         const computed = r2(!grand && sinceLastTotal.length === 0 && miscAmount !== 0 ? prevComputed[kind] + miscAmount : itemsSum + miscAmount);
@@ -299,6 +337,7 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
       }
       skipped.push({ sheet: sheet.name, row: rowNo, code, description: description || code, reason: 'Total row', canInclude: false });
       afterTotal = true;
+      pendingHeads = [];
       continue;
     }
 
@@ -328,6 +367,7 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
         groupHeading = description;
         subHeading = '';
       } else if (description) subHeading = description;
+      keepHeading(rowNo, code, description);
       skipped.push({
         sheet: sheet.name,
         row: rowNo,
@@ -355,6 +395,7 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
     // nothing priced on the row. It is not an item with a broken quantity. "LS" with no amount is an item still to be priced.
     if (typeof qtyCell === 'string' && !/\d/.test(qtyCell) && !/^#/.test(qtyCell.trim()) && !lsWord && !priced) {
       if (description) heading = description;
+      keepHeading(rowNo, code, description);
       skipped.push({ sheet: sheet.name, row: rowNo, code, description: description || cells.map(text).filter(Boolean).join(' '), reason: `Quantity column reads “${text(qtyCell)}” (a note, not a quantity)`, canInclude: Boolean(description) });
       continue;
     }
@@ -397,6 +438,9 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
     }
 
     const rates = { supply: 0, erection: 0, testing: 0 };
+    // The amounts the file states. The file's rate is always kept as written; where its amount is not qty × rate
+    // (a weight or distance in the formula, a rounded amount, a rate left out of the totals) the amount is kept too.
+    const fileAmounts: NonNullable<ParsedItem['fileAmounts']> = {};
     for (const kind of ['supply', 'erection', 'testing'] as const) {
       if (lumpSum) {
         // Only the amounts count on a lump-sum row; its rate cells hold whatever helped work the amount out.
@@ -415,8 +459,8 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
       // (an "Installing insulator strings" line with the conductor's supply rate): the file's totals leave it out.
       const otherAmounts = KINDS.filter((k) => k !== kind).some((k) => (readNumber(get(cells, `${k}Amount`), 'Amount').value ?? 0) !== 0);
       if (col[`${kind}Amount`] !== undefined && text(get(cells, `${kind}Amount`)) === '' && otherAmounts && rates[kind] !== 0 && qtyValue) {
-        issues.push({ level: 'warning', field: 'rate', message: `${label} rate ${formatNumber(rates[kind])} has no ${kind} amount in the file, so it is left out, as in the file's totals` });
-        rates[kind] = 0;
+        issues.push({ level: 'warning', field: 'rate', message: `${label} rate ${formatNumber(rates[kind])} has no ${kind} amount in the file, so its amount is 0, as in the file's totals` });
+        fileAmounts[kind] = { qty: qtyValue, rate: rates[kind], amount: 0 };
         continue;
       }
       if (tonnes !== null && qtyValue !== null && read.value !== null && rates[kind] !== 0) {
@@ -424,8 +468,8 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
         const perNo = amount !== null && Math.abs(qtyValue * read.value - amount) <= AMOUNT_TOLERANCE;
         const perMt = amount !== null && Math.abs(tonnes * read.value - amount) <= AMOUNT_TOLERANCE;
         if (perMt && !perNo) {
-          rates[kind] = qtyValue === 0 ? 0 : (read.value * tonnes) / qtyValue;
-          issues.push({ level: 'warning', field: 'rate', message: `${label} rate ${formatNumber(read.value)} is per MT; taken as ${formatNumber(r2(rates[kind]))} per No (${tonnes} MT ÷ ${qtyValue} No)` });
+          fileAmounts[kind] = { qty: qtyValue, rate: rates[kind], amount: amount! };
+          issues.push({ level: 'warning', field: 'rate', message: `${label} rate ${formatNumber(read.value)} is per MT: the amount is ${formatNumber(r2(amount!))} for ${tonnes} MT, as in the file` });
           continue;
         }
         if (amount === null) {
@@ -435,22 +479,22 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
       }
       if (amount !== null && qtyValue !== null && read.value !== null) {
         const expected = r2(qtyValue * read.value);
+        if (expected !== r2(amount)) fileAmounts[kind] = { qty: qtyValue, rate: rates[kind], amount };
         if (Math.abs(expected - amount) > AMOUNT_TOLERANCE) {
-          // The sheet's own amount is what its totals and abstract use (e.g. a "× 0.48" in the formula), so it wins.
-          if (qtyValue > 0) {
-            rates[kind] = amount / qtyValue;
-            issues.push({
-              level: 'warning',
-              field: 'amount',
-              message: `${label} amount in the file is ${formatNumber(amount)}, but qty × rate is ${formatNumber(expected)}. The file’s amount is used (rate ${formatNumber(r2(rates[kind]))})`,
-            });
-          } else {
-            issues.push({ level: 'warning', field: 'amount', message: `${label} amount in the file is ${formatNumber(amount)}, but the quantity is ${qtyValue}` });
-          }
+          // The sheet's own amount is what its totals and abstract use (e.g. a "× 0.48" in the formula), so it is kept beside the rate.
+          issues.push({
+            level: 'warning',
+            field: 'amount',
+            message:
+              qtyValue > 0
+                ? `${label} amount in the file is ${formatNumber(amount)}, not qty × rate (${formatNumber(expected)}): the formula has a weight or distance in it. The file’s rate and amount are both kept`
+                : `${label} amount in the file is ${formatNumber(amount)}, but the quantity is ${qtyValue}`,
+          });
         }
       } else if (amount !== null && amount !== 0 && read.value === null && qtyValue) {
         // An amount with no rate (the rate was worked out off-sheet): keep the amount.
         rates[kind] = amount / qtyValue;
+        fileAmounts[kind] = { qty: qtyValue, rate: rates[kind], amount };
         issues.push({ level: 'warning', field: 'rate', message: `No ${kind} rate in the file, but an amount of ${formatNumber(amount)}; rate taken as ${formatNumber(r2(rates[kind]))}` });
       }
     }
@@ -469,6 +513,8 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
       supplyRate: rates.supply,
       erectionRate: rates.erection,
       testingRate: rates.testing,
+      ...(Object.keys(fileAmounts).length ? { fileAmounts } : {}),
+      ...(pendingHeads.length ? { headings: pendingHeads } : {}),
       srRef: text(get(cells, 'srRef')) || undefined,
       srCode: text(get(cells, 'srCode')) || srCodeInRemarks(cells, col) || undefined,
       group: [...new Set([groupHeading, subHeading].filter((h) => h && h !== description))].join(' · ') || undefined,
@@ -481,6 +527,7 @@ function parseSheet(sheet: SheetGrid, idPrefix: string) {
       else seenCodes.set(key, item);
     }
     if (!SUB_ITEM.test(code) && description) heading = description;
+    pendingHeads = [];
     items.push(item);
     sinceLastTotal.push(item);
     afterTotal = false;
@@ -548,6 +595,17 @@ export function readAbstract(sheet: SheetGrid): StatedAbstract | null {
 
 const isFullAbstract = (a: StatedAbstract) => a.basic !== undefined && a.total !== undefined && (a.material !== undefined || a.labour !== undefined) && a.gst !== undefined;
 
+/** The estimate's name in a sheet's title rows ("Estimate for Conversion of 66kV S/C tapped line …"), first 60 letters, for telling which estimate a sheet belongs to. */
+function projectTitle(sheet: SheetGrid | undefined): string {
+  for (const cells of (sheet?.rows ?? []).slice(0, 8)) {
+    for (const c of cells) {
+      const t = text(c);
+      if (t.length > 40 && !/karnataka power|^sl\.?\s*no/i.test(t)) return t.toLowerCase().replace(/[^a-z0-9]/g, '').slice(0, 60);
+    }
+  }
+  return '';
+}
+
 export function parseBoq(sheets: SheetGrid[], fileName: string, section: EstimateSection, now = new Date()): BoqReadResult {
   const result: BoqReadResult = { fileName, section, readAt: now.toISOString(), sheets: [], items: [], skipped: [], totals: [], misc: [], abstracts: [] };
   sheets.forEach((sheet, i) => {
@@ -585,6 +643,21 @@ export function parseBoq(sheets: SheetGrid[], fileName: string, section: Estimat
   if (used.some((s) => s.section === 'line') && !used.some((s) => s.section === 'electrical')) {
     for (const s of used) if (s.section === 'civil') s.section = 'lineCivil';
     if (!result.abstracts!.some((a) => a.part === 'line')) for (const a of result.abstracts!) if (a.part === 'I') a.part = 'line';
+  }
+  // A workbook holding both a line estimate and a terminal-bay estimate: each sheet carries its estimate's name in its
+  // title. A civil sheet or abstract with the line estimate's title (and not the bay's) belongs to the line works, so the
+  // line's civil work and its statutory charges and compensation don't land in Abstract-I.
+  if (used.some((s) => s.section === 'line') && used.some((s) => s.section === 'electrical')) {
+    const titleOf = (name: string) => projectTitle(sheets.find((g) => g.name === name));
+    const titlesOf = (section: EstimateSection) => new Set(used.filter((s) => s.section === section).map((s) => titleOf(s.name)).filter(Boolean));
+    const lineTitles = titlesOf('line');
+    const bayTitles = titlesOf('electrical');
+    const ofLine = (name: string) => {
+      const t = titleOf(name);
+      return Boolean(t) && lineTitles.has(t) && !bayTitles.has(t);
+    };
+    for (const s of used) if (s.section === 'civil' && ofLine(s.name)) s.section = 'lineCivil';
+    for (const a of result.abstracts!) if (a.part === 'I' && ofLine(a.sheet)) a.part = 'line';
   }
   // A substation job (no line sheets): an abstract titled after the line the bay serves is still Abstract-I.
   if (used.length && !used.some((s) => s.section === 'line' || s.section === 'lineCivil') && !result.abstracts!.some((a) => a.part === 'I')) {

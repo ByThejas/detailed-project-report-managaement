@@ -7,7 +7,7 @@ import { isMultiRate, type Estimate, type EstimateLine, type EstimateSection } f
 import { sectionLabel } from '@/features/boq-import/toEstimateLine';
 import { catalogName, useRateCatalog } from './catalog';
 import { forgetChoices, recalledChoices, rememberChoices, rememberedCount } from './memory';
-import { applySuggestion, exactCodeMatch, isReliable, isWeakMatch, jobContext, oddRates, sorDifferences, type SorDifference, ratingDifferences, suggestRates, isSetBasis, nosInSet, rateRefOf, suggestionFor, tonnesPerNo, unitBasis, usualSetNos, type LabourBasis, type OddRate, type RateIndex, type RateSuggestion } from './match';
+import { allItems, applySuggestion, exactCodeMatch, isReliable, isWeakMatch, jobContext, oddRates, sorDifferences, type SorDifference, ratingDifferences, suggestRates, isSetBasis, nosInSet, rateRefOf, suggestionFor, tonnesPerNo, unitBasis, usualSetNos, type LabourBasis, type OddRate, type RateIndex, type RateSuggestion } from './match';
 
 const rs = (n: number) => formatNumber(Math.round(n * 100) / 100);
 const PRICEABLE: EstimateSection[] = ['electrical', 'civil', 'line', 'lineCivil'];
@@ -19,8 +19,11 @@ function byCode(index: RateIndex, line: EstimateLine, query: string): RateSugges
   if (!q) return null;
   const sheetHint = q.includes(' ') ? q.slice(0, q.lastIndexOf(' ')).toLowerCase() : '';
   const code = q.split(' ').at(-1)!;
-  const found = index.items.filter((i) => i.code === code && (!sheetHint || i.sheet.toLowerCase().includes(sheetHint)));
-  const item = found.find((i) => i.sheet === 'By code') ?? found[0];
+  // Civil parts look in the civil schedule of rates first, when the user added one.
+  const civilLine = line.section === 'civil' || line.section === 'lineCivil';
+  const pool = civilLine && index.civil ? [...index.civil.items, ...index.items] : allItems(index);
+  const found = pool.filter((i) => i.code === code && (!sheetHint || i.sheet.toLowerCase().includes(sheetHint)));
+  const item = (civilLine ? undefined : found.find((i) => i.sheet === 'By code')) ?? found[0];
   if (!item) return null;
   return suggestionFor(item, line);
 }
@@ -42,7 +45,7 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
   const toast = useToast();
   const [open, setOpen] = useState(defaultOpen);
   // The catalog kept in the Rate Catalog page; loaded once the card is opened, and again when it changes.
-  const { catalog, index, failed } = useRateCatalog(open);
+  const { catalog, civil, index, failed } = useRateCatalog(open);
   const [section, setSection] = useState<EstimateSection | 'all'>('all');
   const [onlyMissing, setOnlyMissing] = useState(true);
   const [choices, setChoices] = useState<Record<string, Choice>>({});
@@ -57,7 +60,7 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
   // Rates already in the estimate that sit far from the SoR item the line surely is.
   const odd = useMemo(() => (index ? oddRates(index, estimate.lines.filter((l) => PRICEABLE.includes(l.section))) : []), [index, estimate.lines]);
   const oddById = new Map<string, OddRate>(odd.map((o) => [o.line.id, o]));
-  // Rates that are not the rate of the SoR item the line surely is. The rate catalog is the rate source, so these start ticked.
+  // Rates that are not the rate of the SoR item the line surely is. Listed for review; they are not ticked for the user.
   const diffs = useMemo(() => (index ? sorDifferences(index, estimate.lines.filter((l) => PRICEABLE.includes(l.section))) : []), [index, estimate.lines]);
   const diffById = new Map<string, SorDifference>(diffs.map((d) => [d.line.id, d]));
   const lines = estimate.lines.filter(
@@ -87,7 +90,10 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
 
   // Only a line that names its SoR code, with that exact item found, starts ticked.
   const isExact = (id: string) => Boolean(suggestions.get(id)?.[0]?.exact);
-  const choiceOf = (id: string): Choice => choices[id] ?? { pick: 0, code: '', apply: isExact(id) || diffById.has(id) };
+  // A rate already on the line (the uploaded estimate's own) is never pre-ticked: only lines with no rate start ticked,
+  // and only when the BOQ names the exact SoR code. Replacing a file's rate always takes the user's own tick.
+  const lineById = new Map(estimate.lines.map((l) => [l.id, l]));
+  const choiceOf = (id: string): Choice => choices[id] ?? { pick: 0, code: '', apply: isExact(id) && !hasRate(lineById.get(id)!) };
   const exactCount = lines.filter((l) => isExact(l.id)).length;
   const isRemembered = (id: string) => Boolean(suggestions.get(id)?.[0]?.remembered);
   const rememberedIds = lines.filter((l) => !hasRate(l) && isRemembered(l.id)).map((l) => l.id);
@@ -139,7 +145,7 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
       <CardHeader
         id="rates-title"
         title="Price from the rate catalog"
-        subtitle={`${catalog ? catalogName(catalog) : 'The rate catalog'} (kept in the Rate Catalog page): supply, erection and T&C rates. Items whose BOQ names the exact SoR code start ticked; every match by wording waits for your tick. Nothing is applied until you click Apply.`}
+        subtitle={`${catalog ? catalogName(catalog) : 'The rate catalog'}${civil ? ` and the civil catalog ${catalogName(civil)}` : ''} (kept in the Rate Catalog page): supply, erection and T&C rates. Items with no rate whose BOQ names the exact SoR code start ticked; rates already in the estimate, and every match by wording, wait for your tick. Nothing is applied until you click Apply.`}
         action={
           <button type="button" className="btn-secondary" onClick={() => setOpen((o) => !o)} aria-expanded={open}>
             <BookOpen className="h-3.5 w-3.5" aria-hidden />
@@ -171,7 +177,7 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
             <div role="status" aria-label="Rates that differ from the SoR" className="border-b border-rose-200 bg-rose-50 px-4 py-2.5 text-xs text-rose-900">
               <p className="flex items-start gap-1.5 font-medium">
                 <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden />
-                {diffs.length} {diffs.length === 1 ? 'rate differs' : 'rates differ'} from the SoR item the line surely is. {diffs.length === 1 ? 'It is' : 'They are'} ticked below to take the SoR rate; untick to keep the estimate’s.
+                {diffs.length} {diffs.length === 1 ? 'rate differs' : 'rates differ'} from the SoR item the line surely is. The estimate keeps its own {diffs.length === 1 ? 'rate' : 'rates'}; tick a row below only if you want the SoR rate instead.
                 <button type="button" className="btn-ghost -my-1 ml-auto h-7 text-xs" onClick={() => setOnlyDiff((v) => !v)}>
                   {onlyDiff ? 'Show all items' : 'Show only these'}
                 </button>
@@ -288,7 +294,7 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
                           )}
                           {c.pick !== -1 && sugg.length > 0 && isWeakMatch(sugg[0]) && (
                             <p className="text-xs text-amber-700">
-                              No close SoR item: these are only loose guesses, and SoR 76 may not list this item{l.section === 'civil' || l.section === 'lineCivil' ? ' (most civil work is priced from the KPWD schedule, which is not in the catalog)' : ''}. Enter the rate from the approved source, or type the SoR code.
+                              No close SoR item: these are only loose guesses, and {l.section === 'civil' || l.section === 'lineCivil' ? (civil ? `neither SoR 76 nor ${catalogName(civil)} may list this item` : 'SoR 76 may not list this item (most civil work is priced from the KPWD schedule: add it under Rate Catalog, Civil)') : 'SoR 76 may not list this item'}. Enter the rate from the approved source, or type the SoR code.
                             </p>
                           )}
                           {s && ratingDifferences(l, s.item).length > 0 && (

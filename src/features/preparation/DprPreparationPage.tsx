@@ -28,6 +28,7 @@ import {
   PREPARATION_INPUTS,
 } from "@/features/documents/catalog";
 import { filesOf, statusOf } from "@/features/documents/state";
+import { useAttachFiles } from "@/features/documents/useAttach";
 import {
   EMPTY_DOCUMENTS,
   type DocStatus,
@@ -52,7 +53,9 @@ import { BoqTable } from "./BoqTable";
 import { RatePricingCard } from "@/features/rates/RatePricingCard";
 import { CostBenefitCard } from "./CostBenefitCard";
 import { LoadDataCard } from "./LoadDataCard";
-import { crossChecks } from "@/features/dpr-document/crossChecks";
+import { crossChecks, openBlockers } from "@/features/dpr-document/crossChecks";
+import { FixBanner } from "./FixGuide";
+import { clearFixMark, focusFix } from "./fixFocus";
 import {
   GenerateDprPanel,
   ReportTextPanel,
@@ -62,6 +65,7 @@ import { contentOf } from "@/features/dpr-document/content";
 import {
   STEPS,
   dprChecklist,
+  type Gap,
   type StepKey,
 } from "@/features/dpr-document/readiness";
 import {
@@ -73,7 +77,7 @@ import {
 } from "./calc";
 import { exportEstimate } from "./exportEstimate";
 import { NumberInput } from "./NumberInput";
-import { buildTemplate } from "./template";
+import { TEMPLATE_SOURCE, buildTemplate } from "./template";
 import type { Estimate } from "./types";
 
 const lakhs = (n: number) => formatNumber(Math.round(n * 100) / 100);
@@ -154,12 +158,31 @@ function InputsCard({
   onUploadEstimate: () => void;
 }) {
   const [preview, setPreview] = useState<{ key: string; name: string } | null>(null);
+  const attach = useAttachFiles(dprId);
+  const picker = useRef<HTMLInputElement>(null);
+  const picking = useRef<{ key: string; name: string } | null>(null);
+  const pick = (spec: { key: string; name: string }) => {
+    picking.current = spec;
+    picker.current?.click();
+  };
   return (
     <Card role="region" aria-labelledby="inputs-title">
+      <input
+        ref={picker}
+        type="file"
+        multiple
+        hidden
+        data-testid="inputs-file-input"
+        onChange={(ev) => {
+          const files = [...(ev.target.files ?? [])];
+          if (picking.current && files.length) attach(picking.current, files);
+          ev.target.value = "";
+        }}
+      />
       <CardHeader
         id="inputs-title"
         title="Input documents"
-        subtitle="Collected automatically from the Documents section. Click a file to preview it."
+        subtitle="The same files as the Documents section. Upload a missing one here, or click a file to preview it."
         action={
           <Link
             to={`/documents?dpr=${encodeURIComponent(dprId)}`}
@@ -176,6 +199,7 @@ function InputsCard({
           return (
             <li
               key={spec.key}
+              data-fix={`doc:${spec.key}`}
               className="flex flex-wrap items-center gap-x-4 gap-y-1 px-4 py-2.5 text-[13px]"
             >
               <span className="num w-5 text-gray-400">{i + 1}</span>
@@ -203,9 +227,24 @@ function InputsCard({
                   {status === "N/A" ? "Not applicable" : "Not uploaded yet"}
                 </span>
               )}
-              <Badge tone={STATUS_TONE[status]}>
-                {status === "Awaiting" ? "Missing" : status}
-              </Badge>
+              {status === "Awaiting" && spec.requirement !== "Mandatory" ? (
+                <Badge tone="gray">Optional</Badge>
+              ) : (
+                <Badge tone={STATUS_TONE[status]}>
+                  {status === "Awaiting" ? "Missing" : status}
+                </Badge>
+              )}
+              {status !== "N/A" && (
+                <button
+                  type="button"
+                  className={`${files.length ? "btn-ghost" : "btn-secondary"} h-7 px-2 text-xs`}
+                  onClick={() => pick(spec)}
+                  aria-label={`Upload ${spec.name}`}
+                >
+                  <Upload className="h-3 w-3" aria-hidden />
+                  {files.length ? "Add" : "Upload"}
+                </button>
+              )}
               {BOQ_DOCUMENTS[spec.key] && (
                 <span className="w-full pl-9 text-xs text-gray-500">
                   The BOQ PDF as received. The estimated BOQ workbook goes in
@@ -300,7 +339,7 @@ function EstimateUploadCard({
   };
 
   return (
-    <Card id="estimate-upload" role="region" aria-labelledby="estimate-upload-title" className="scroll-mt-4">
+    <Card id="estimate-upload" data-fix="estimate-upload" role="region" aria-labelledby="estimate-upload-title" className="scroll-mt-4">
       <CardHeader
         id="estimate-upload-title"
         title="Upload BOQ estimate"
@@ -473,7 +512,7 @@ export function AbstractCard({
   const setLine = (patch: Partial<typeof lc>) =>
     onChange({ ...e, lineCharges: { ...lc, ...patch } });
   return (
-    <Card role="region" aria-labelledby={id}>
+    <Card role="region" aria-labelledby={id} data-fix={`abstract:${part}`}>
       <CardHeader id={id} title={meta.title} subtitle={meta.subtitle} />
       <div className="flex flex-wrap gap-x-6 gap-y-2 border-b border-gray-200 px-4 py-3 text-[13px] text-gray-600">
         {part === "I" && (
@@ -610,13 +649,28 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
   const [reviewing, setReviewing] = useState<BoqReadResult | null>(null);
   const [downloadBlocked, setDownloadBlocked] = useState(false);
   const [tab, setTabState] = useState<StepKey>("inputs");
+  // The problem a Fix button was pressed for: its step shows what to do and where.
+  const [fix, setFix] = useState<Gap | null>(null);
   const setTab = (step: StepKey) => {
     setTabState(step);
+    if (fix && fix.step !== step) {
+      setFix(null);
+      clearFixMark();
+    }
     requestAnimationFrame(() =>
       document
         .getElementById(`tab-${step}`)
         ?.scrollIntoView?.({ block: "nearest", behavior: "smooth" }),
     );
+  };
+  const goFix = (g: Gap) => {
+    setTabState(g.step);
+    setFix(g);
+    if (g.target) focusFix(g.target);
+    else
+      requestAnimationFrame(() =>
+        document.getElementById(`tab-${g.step}`)?.scrollIntoView?.({ block: "start", behavior: "smooth" }),
+      );
   };
   const reads = useBoqReads(dpr.id);
   const [pickEstimate, setPickEstimate] = useState(false);
@@ -656,9 +710,20 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
   const missingRates = linesMissingRates(e);
   const lineWorks = hasLineWorks(e);
   const abstracts = Object.values(reads.data ?? {}).flat().flatMap((r) => r.abstracts ?? []);
-  const checks = crossChecks(dpr, e, contentOf(dpr, e), abstracts);
-  const checklist = dprChecklist(e, docs, contentOf(dpr, e), checks);
+  const content = contentOf(dpr, e);
+  const checks = crossChecks(dpr, e, content, abstracts);
+  const checklist = dprChecklist(e, docs, content, checks);
   const ready = checklist.length === 0;
+  // Whether the problem being fixed is still there (a warning-only check is not on the checklist).
+  const fixOpen = !fix
+    ? false
+    : fix.id.startsWith("check:")
+      ? checks.some((c) => `check:${c.id}` === fix.id && (c.severity === "warning" || openBlockers([c], content.acks).length > 0))
+      : checklist.some((g) => g.id === fix.id);
+  // The next open problem after this one, in checklist order (from the top once this one is solved).
+  const fixAt = fix ? checklist.findIndex((g) => g.id === fix.id) : -1;
+  const nextFix = fix ? ([...checklist.slice(fixAt + 1), ...checklist.slice(0, Math.max(fixAt, 0))][0] ?? null) : null;
+  const liveFix = fix ? checklist.find((g) => g.id === fix.id) ?? fix : null;
   const stepDone = (step: StepKey) =>
     step === "generate" ? ready : !checklist.some((g) => g.step === step);
   const stepIndex = STEPS.findIndex((s) => s.key === tab);
@@ -838,6 +903,21 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
         </ol>
       </nav>
 
+      {liveFix && fix!.step === tab && (
+        <FixBanner
+          gap={liveFix}
+          solved={!fixOpen}
+          left={checklist.length}
+          onShow={() => focusFix(liveFix.target)}
+          onNext={nextFix ? () => goFix(nextFix) : null}
+          onBack={() => setTab("generate")}
+          onClose={() => {
+            setFix(null);
+            clearFixMark();
+          }}
+        />
+      )}
+
       {tab === "inputs" && (
         <div
           role="tabpanel"
@@ -891,9 +971,11 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
               role="status"
               className="rounded-lg border border-gray-200 bg-white px-4 py-2.5 text-[13px] text-gray-700"
             >
-              This estimate was built for {e.templateCapacity}, but the DPR is
-              now {dpr.capacity} {dpr.voltage}. Use “Reset to template” to
-              rebuild it.
+              This estimate was started for {e.templateCapacity}, but the DPR
+              is now {dpr.capacity} {dpr.voltage}.{" "}
+              {e.lines.some((l) => l.source === TEMPLATE_SOURCE)
+                ? "Upload this project’s BOQ workbook and import it with “Replace”, or use “Reset to template” to rebuild the sample for the new capacity."
+                : "Check that the imported BOQ is for the new capacity; the consistency checks on Generate DPR flag transformers that do not match."}
             </p>
           )}
           {missingRates.length > 0 && (
@@ -962,6 +1044,8 @@ function Workspace({ dpr, docs }: { dpr: DprRow; docs: DprDocuments }) {
             checks={checks}
             onChange={change}
             onGoTo={setTab}
+            onFix={goFix}
+            checklist={checklist}
           />
         </div>
       )}

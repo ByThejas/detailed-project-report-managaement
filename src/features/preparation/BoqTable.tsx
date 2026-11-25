@@ -1,11 +1,20 @@
-import type { CSSProperties } from 'react';
+import { Fragment, type CSSProperties } from 'react';
 import { Plus, Trash2 } from 'lucide-react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { formatNumber } from '@/lib/format';
-import { SECTION_KEYS, lineAmounts, sectionTotals, type TotalKey } from './calc';
+import { SECTION_KEYS, amountFactor, lineAmounts, sectionTotals, type TotalKey } from './calc';
 import { NumberInput } from './NumberInput';
 import { TEMPLATE_SOURCE, newLine } from './template';
 import { isMultiRate, type Estimate, type EstimateLine, type EstimateSection } from './types';
+
+const KIND_LABEL = { supply: 'supply', erection: 'erection', testing: 'T&C' } as const;
+/** Where the file's amount is not qty × rate (a weight or distance in its formula), how it is worked, e.g. "erection = qty × rate × 0.17". */
+const fileFactors = (l: EstimateLine) =>
+  (['supply', 'erection', 'testing'] as const)
+    .map((k) => ({ k, f: amountFactor(l, k) }))
+    .filter((x) => x.f !== null)
+    .map((x) => `${KIND_LABEL[x.k]} = qty × rate × ${Number(x.f!.toFixed(4))}`)
+    .join('; ') || null;
 
 const rupees = (n: number) => formatNumber(Math.round(n * 100) / 100);
 
@@ -47,7 +56,15 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
         return next;
       }),
     });
-  const remove = (id: string) => onChange({ ...estimate, lines: estimate.lines.filter((l) => l.id !== id) });
+  const remove = (id: string) => {
+    const gone = estimate.lines.find((l) => l.id === id);
+    const next = gone?.headings?.length ? lines[lines.findIndex((l) => l.id === id) + 1] : undefined;
+    // The removed line's heading rows ("A1 | CIRCUIT BREAKER …") stay, above the next item under them.
+    onChange({
+      ...estimate,
+      lines: estimate.lines.filter((l) => l.id !== id).map((l) => (next && l.id === next.id ? { ...l, headings: [...gone!.headings!, ...(l.headings ?? [])] } : l)),
+    });
+  };
   const add = () => onChange({ ...estimate, lines: [...estimate.lines, newLine(section, `${meta.prefix}${lines.length + 1}`)] });
   const setMisc = (key: TotalKey, n: number) => onChange({ ...estimate, misc: { ...estimate.misc, [key]: n } });
 
@@ -55,7 +72,7 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
   const titleId = `${section}-boq-title`;
 
   return (
-    <Card role="region" aria-labelledby={titleId}>
+    <Card role="region" aria-labelledby={titleId} data-fix={`boq:${section}`}>
       <CardHeader
         id={titleId}
         title={meta.title}
@@ -100,7 +117,17 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
               const a = lineAmounts(l);
               const noRate = l.qty > 0 && l.supplyRate === 0 && l.erectionRate === 0 && l.testingRate === 0;
               return (
-                <tr key={l.id} className={`align-top ${noRate ? 'bg-amber-50/60' : ''}`}>
+                <Fragment key={l.id}>
+                  {(l.headings ?? []).map((h, k) => (
+                    // A heading row of the uploaded estimate, with its Sl. No. as in the file.
+                    <tr key={`${l.id}-h${k}`} className="bg-gray-50/60 text-gray-700">
+                      <td className="num py-1.5 pl-4 pr-2 font-semibold">{h.code}</td>
+                      <td colSpan={electrical ? 10 : 6} className="px-2 py-1.5 font-medium">
+                        {h.text}
+                      </td>
+                    </tr>
+                  ))}
+                <tr data-fix={`line:${l.id}`} className={`align-top ${noRate ? 'bg-amber-50/60' : ''}`}>
                   <td className="py-1.5 pl-4 pr-2">
                     <input
                       aria-label="Item number"
@@ -126,6 +153,7 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
                         SoR erection/T&amp;C not added, as it is not per {l.unit || 'unit'}: {l.labourNotAdded}. Type the rate per {l.unit || 'unit'}, or set the basis in “Price from the rate catalog”.
                       </p>
                     )}
+                    {fileFactors(l) && <p className="text-xs text-gray-500">Amount as in the file: {fileFactors(l)}</p>}
                     {noRate && <p className="text-xs text-amber-700">Rate needed</p>}
                     {electrical && l.qty > 0 && l.supplyRate === 0 && (l.erectionRate > 0 || l.testingRate > 0) && <p className="text-xs text-gray-400">Labour only: no supply rate</p>}
                   </td>
@@ -162,6 +190,7 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
                     </button>
                   </td>
                 </tr>
+                </Fragment>
               );
             })}
             {lines.length === 0 && (
@@ -199,22 +228,22 @@ export function BoqTable({ section, estimate, onChange }: BoqTableProps) {
               {electrical ? (
                 <>
                   <td />
-                  <td className="px-2 py-1 text-right">
+                  <td className="px-2 py-1 text-right" data-fix={`misc:${single}`}>
                     <NumberInput label={`${meta.miscLabel} supply amount`} value={estimate.misc[single] ?? 0} onChange={(n) => setMisc(single, n)} className="-mr-[7px] w-28" />
                   </td>
                   <td />
-                  <td className="px-2 py-1 text-right">
+                  <td className="px-2 py-1 text-right" data-fix={`misc:${erectionKey}`}>
                     <NumberInput label={`${meta.miscLabel} erection amount`} value={estimate.misc[erectionKey] ?? 0} onChange={(n) => setMisc(erectionKey, n)} className="-mr-[7px] w-24" />
                   </td>
                   <td />
-                  <td className="px-2 py-1 text-right">
+                  <td className="px-2 py-1 text-right" data-fix={`misc:${testingKey}`}>
                     <NumberInput label={`${meta.miscLabel} testing amount`} value={estimate.misc[testingKey] ?? 0} onChange={(n) => setMisc(testingKey, n)} className="-mr-[7px] w-24" />
                   </td>
                 </>
               ) : (
                 <>
                   <td />
-                  <td className="px-2 py-1 text-right">
+                  <td className="px-2 py-1 text-right" data-fix={`misc:${single}`}>
                     <NumberInput
                       label={meta.miscLabel}
                       value={estimate.misc[single] ?? 0}

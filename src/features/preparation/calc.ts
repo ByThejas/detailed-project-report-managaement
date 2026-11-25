@@ -1,13 +1,44 @@
-import type { Estimate, EstimateLine, EstimateSection } from './types';
+import type { Estimate, EstimateLine, EstimateSection, FileAmount, RateKind } from './types';
 
 const LAKH = 100_000;
 const r2 = (n: number) => Math.round((n + Number.EPSILON) * 100) / 100;
 
+/**
+ * A line's amount for one rate. A line read from an uploaded estimate shows the file's own amount while its quantity
+ * and rate are the file's. Changed afterwards, the amount keeps the file's working: the amount per unit of quantity when
+ * only the quantity changed, and the file's multiplier on qty × rate (a weight, a distance) when the rate changed.
+ */
+export function amountOf(qty: number, rate: number, f: FileAmount | undefined): number {
+  const plain = r2(qty * rate);
+  if (!f) return plain;
+  if (f.qty === qty && f.rate === rate) return f.amount;
+  if (f.rate === rate) return f.qty ? r2((f.amount / f.qty) * qty) : plain;
+  return f.qty && f.rate ? r2(qty * rate * (f.amount / (f.qty * f.rate))) : plain;
+}
+
+export const lineAmount = (l: EstimateLine, kind: RateKind): number => amountOf(l.qty, l[`${kind}Rate`], l.fileAmounts?.[kind]);
+
 export const lineAmounts = (l: EstimateLine) => ({
-  supply: r2(l.qty * l.supplyRate),
-  erection: r2(l.qty * l.erectionRate),
-  testing: r2(l.qty * l.testingRate),
+  supply: lineAmount(l, 'supply'),
+  erection: lineAmount(l, 'erection'),
+  testing: lineAmount(l, 'testing'),
 });
+
+/** Rs per unit of the line's quantity that its amount works out to: the rate itself unless the file's amount works on a weight or distance. */
+export const effectiveRate = (l: EstimateLine, kind: RateKind): number => {
+  const rate = l[`${kind}Rate`];
+  if (!l.fileAmounts?.[kind] || !l.qty) return rate;
+  const a = lineAmount(l, kind);
+  return Math.abs(a - r2(l.qty * rate)) <= 1 ? rate : a / l.qty;
+};
+
+/** The multiplier the file's amount puts on qty × rate (e.g. 0.17 for "0.17 MT per tower"), when it is not 1. */
+export const amountFactor = (l: EstimateLine, kind: RateKind): number | null => {
+  const f = l.fileAmounts?.[kind];
+  if (!f || !f.qty || !f.rate) return null;
+  const k = f.amount / (f.qty * f.rate);
+  return Math.abs(f.amount - f.qty * f.rate) <= 1 ? null : k;
+};
 
 type Totals = { supply: number; erection: number; testing: number; civil: number; dismantling: number; lineSupply: number; lineErection: number; lineTesting: number; lineCivil: number };
 export type TotalKey = keyof Totals;

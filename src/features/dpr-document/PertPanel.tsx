@@ -57,7 +57,7 @@ export function PertPanel({ dpr, estimate, onChange }: Props) {
               <option>Transmission line work</option>
             </select>
           </label>
-          <label className="block">
+          <label className="block" data-fix="pert:completion">
             <span className="label-muted mb-1 block">Completion period (months)</span>
             <input type="number" min={1} className="input" value={p.completionMonths} onChange={(ev) => save({ ...p, completionMonths: int(ev.target.value) })} />
           </label>
@@ -82,9 +82,9 @@ export function PertPanel({ dpr, estimate, onChange }: Props) {
             Provisional schedule
           </label>
         </div>
-        <div className="divide-y divide-gray-100">
+        <div className="divide-y divide-gray-100" data-fix="pert:activities">
           {p.activities.map((a, i) => (
-            <div key={i} className="grid gap-2 px-4 py-2.5 text-[13px] sm:grid-cols-[8rem_2fr_auto_auto_auto_auto] sm:items-start">
+            <div key={i} data-fix={`pert:activity:${i}`} className="grid gap-2 px-4 py-2.5 text-[13px] sm:grid-cols-[8rem_2fr_auto_auto_auto_auto] sm:items-start">
               <input aria-label={`Activity ${i + 1} name`} className="input" value={a.name} onChange={(ev) => setAct(i, { name: ev.target.value })} />
               <input aria-label={`${a.name} description`} className="input" placeholder={a.preAward ? '' : 'What the stage covers'} value={a.label ?? ''} onChange={(ev) => setAct(i, { label: ev.target.value })} />
               <label className="flex items-center gap-1 whitespace-nowrap text-xs text-gray-500">

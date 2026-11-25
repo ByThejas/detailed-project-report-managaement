@@ -1,4 +1,4 @@
-import type { EstimateSection } from '@/features/preparation/types';
+import type { EstimateSection, FileAmount, RateKind } from '@/features/preparation/types';
 
 /** One worksheet cell after reading: a number, text, or empty. Excel errors come through as text like "#REF!". */
 export type Cell = string | number | null;
@@ -41,6 +41,14 @@ export interface ParsedItem {
   srCode?: string;
   /** Headings above the item (its group and sub-group), for matching it to the rate catalog. */
   group?: string;
+  /** The row's amounts as stated in the file, per rate. They win over qty × rate (a weight or distance in the formula, rounding). */
+  fileAmounts?: Partial<Record<RateKind, FileAmount>>;
+  /**
+   * The rows with no quantity that the file prints straight above this item: its numbered heading ("A1 | CIRCUIT
+   * BREAKER …") and any sub-heading ("A) Tower type …"), with the Sl. No. exactly as written. They go with the line so
+   * the estimate shows the file's numbering.
+   */
+  headings?: ItemHeading[];
   issues: Issue[];
 }
 
@@ -142,4 +150,11 @@ export interface BoqReadResult {
   abstracts?: StatedAbstract[];
   /** Set when the file could not be read at all. */
   failure?: string;
+}
+
+/** A heading row of the file, as it reads: its Sl. No. cell and its text. */
+export interface ItemHeading {
+  row: number;
+  code: string;
+  text: string;
 }

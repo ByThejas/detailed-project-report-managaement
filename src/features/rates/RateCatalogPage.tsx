@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { BookOpen, Download, RotateCcw, Search, TriangleAlert, Undo2, Upload } from 'lucide-react';
+import { useSearchParams } from 'react-router-dom';
+import { BookOpen, Download, Plus, RotateCcw, Search, Trash2, TriangleAlert, Undo2, Upload } from 'lucide-react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { EmptyState } from '@/components/ui/EmptyState';
 import { PageHeader } from '@/components/ui/PageHeader';
@@ -7,10 +8,10 @@ import { Pagination } from '@/components/ui/Pagination';
 import { blobBytes } from '@/lib/fileStore';
 import { formatNumber } from '@/lib/format';
 import { useToast } from '@/lib/toast';
-import { catalogName, loadBuiltInCatalog, restoreBuiltInCatalog, saveCatalog } from './catalog';
-import { adoptIds, catalogToWorkbook, diffCatalogs, readCatalogFile, type CatalogDiff } from './catalogFile';
+import { catalogName, loadBuiltInCatalog, removeCivilCatalog, restoreBuiltInCatalog, saveCatalog } from './catalog';
+import { adoptIds, catalogToWorkbook, diffCatalogs, HEADERS, readCatalogFile, type CatalogDiff } from './catalogFile';
 import { getSavedCatalog, type ItemEdit, type SavedCatalog } from './catalogStore';
-import type { CatalogChildRate, CatalogItem, RateCatalog } from './types';
+import type { CatalogBook, CatalogChildRate, CatalogItem, RateCatalog } from './types';
 
 const PAGE_SIZE = 40;
 const rs = (n: number | null) => (n == null ? '—' : formatNumber(Math.round(n * 100) / 100));
@@ -68,17 +69,126 @@ function ChildRates({ item, kind, label, edit, onChange }: { item: CatalogItem; 
   );
 }
 
+const BOOKS: { key: CatalogBook; label: string }[] = [
+  { key: 'electrical', label: 'Electrical (SoR)' },
+  { key: 'civil', label: 'Civil (SR)' },
+];
+
+/** Name given to a civil catalog the user starts by typing items in, before uploading any file. */
+const TYPED_CIVIL = 'Civil SR';
+
+const saveBlob = (data: ArrayBuffer, name: string) => {
+  const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  a.click();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+};
+
 /**
- * The rate catalog every BOQ price is matched against. The user keeps it up to date here when rates
- * change (each quarter or month): upload a new catalog workbook, or change a rate by hand. It is saved in
- * this browser; until then the catalog shipped with the app (rate_catalog 76) is used.
+ * The rate catalogs every BOQ price is matched against: the electrical SoR, and a civil schedule of rates
+ * the user adds (civil BOQ items are matched against both). The user keeps them up to date here when rates
+ * change (each quarter or month): upload a new catalog workbook, or change a rate by hand. They are saved
+ * in this browser; until then the electrical catalog shipped with the app (rate_catalog 76) is used.
  */
 export function RateCatalogPage() {
+  const [params, setParams] = useSearchParams();
+  const book: CatalogBook = params.get('book') === 'civil' ? 'civil' : 'electrical';
+  return <CatalogBookView key={book} book={book} onBook={(b) => setParams(b === 'civil' ? { book: b } : {}, { replace: true })} />;
+}
+
+function BookTabs({ book, onBook }: { book: CatalogBook; onBook: (b: CatalogBook) => void }) {
+  return (
+    <div role="tablist" aria-label="Catalog" className="mb-4 flex gap-1 border-b border-gray-200">
+      {BOOKS.map((b) => (
+        <button
+          key={b.key}
+          type="button"
+          role="tab"
+          aria-selected={book === b.key}
+          onClick={() => onBook(b.key)}
+          className={`-mb-px whitespace-nowrap border-b-2 px-3 py-2 text-[13px] font-medium ${book === b.key ? 'border-gray-900 text-gray-900' : 'border-transparent text-gray-500 hover:text-gray-800'}`}
+        >
+          {b.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+/** A form to add one item to the civil catalog by hand (from a printed or PDF schedule of rates). */
+function AddItemForm({ sheets, onAdd, onClose }: { sheets: string[]; onAdd: (i: Omit<CatalogItem, 'id' | 'labour' | 'tc' | 'kind' | 'context'>) => void; onClose: () => void }) {
+  const [sheet, setSheet] = useState(sheets[0] ?? TYPED_CIVIL);
+  const [code, setCode] = useState('');
+  const [item, setItem] = useState('');
+  const [unit, setUnit] = useState('');
+  const [rate, setRate] = useState('');
+  const [sr, setSr] = useState('');
+  const n = Number(rate.replace(/[,\s₹]/g, ''));
+  const ok = item.trim() !== '' && unit.trim() !== '' && rate.trim() !== '' && Number.isFinite(n) && n > 0;
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!ok) return;
+    onAdd({ sheet: sheet.trim() || TYPED_CIVIL, code: code.trim(), item: item.trim(), unit: unit.trim(), rate: n, sr: sr.trim(), book: 'civil' });
+    setCode('');
+    setItem('');
+    setUnit('');
+    setRate('');
+    setSr('');
+  };
+  return (
+    <form aria-label="Add a civil item" onSubmit={submit} className="grid gap-3 border-b border-gray-200 bg-gray-50 px-4 py-3 text-[13px] sm:grid-cols-6">
+      <label className="sm:col-span-1">
+        <span className="mb-1 block text-xs text-gray-500">Sheet</span>
+        <input className="input h-8 w-full" value={sheet} onChange={(e) => setSheet(e.target.value)} list="civil-sheets" />
+        <datalist id="civil-sheets">
+          {sheets.map((x) => (
+            <option key={x} value={x} />
+          ))}
+        </datalist>
+      </label>
+      <label className="sm:col-span-1">
+        <span className="mb-1 block text-xs text-gray-500">Code</span>
+        <input className="input h-8 w-full" value={code} onChange={(e) => setCode(e.target.value)} placeholder="e.g. 4.1.2" />
+      </label>
+      <label className="sm:col-span-4">
+        <span className="mb-1 block text-xs text-gray-500">Description</span>
+        <input className="input h-8 w-full" value={item} onChange={(e) => setItem(e.target.value)} placeholder="As written in the schedule of rates" />
+      </label>
+      <label className="sm:col-span-1">
+        <span className="mb-1 block text-xs text-gray-500">Unit</span>
+        <input className="input h-8 w-full" value={unit} onChange={(e) => setUnit(e.target.value)} placeholder="e.g. m³" />
+      </label>
+      <label className="sm:col-span-1">
+        <span className="mb-1 block text-xs text-gray-500">Rate (Rs)</span>
+        <input className="input num h-8 w-full text-right" inputMode="decimal" value={rate} onChange={(e) => setRate(e.target.value)} />
+      </label>
+      <label className="sm:col-span-2">
+        <span className="mb-1 block text-xs text-gray-500">SR ref (page or clause)</span>
+        <input className="input h-8 w-full" value={sr} onChange={(e) => setSr(e.target.value)} />
+      </label>
+      <div className="flex items-end gap-2 sm:col-span-2">
+        <button type="submit" className="btn-primary" disabled={!ok}>
+          Add item
+        </button>
+        <button type="button" className="btn-ghost" onClick={onClose}>
+          Done
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function CatalogBookView({ book, onBook }: { book: CatalogBook; onBook: (b: CatalogBook) => void }) {
+  const civilBook = book === 'civil';
   const toast = useToast();
   const fileInput = useRef<HTMLInputElement>(null);
   const [saved, setSaved] = useState<SavedCatalog | null>(null);
   const [builtIn, setBuiltIn] = useState<RateCatalog | null>(null);
+  const [loaded, setLoaded] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [adding, setAdding] = useState(false);
   const [query, setQuery] = useState('');
   const [sheet, setSheet] = useState('');
   const [onlyEdited, setOnlyEdited] = useState(false);
@@ -89,19 +199,24 @@ export function RateCatalogPage() {
 
   useEffect(() => {
     let live = true;
-    Promise.all([getSavedCatalog().catch(() => null), loadBuiltInCatalog()])
+    // The civil catalog has no built-in one: it is whatever the user uploads or types in.
+    Promise.all([getSavedCatalog(book).catch(() => null), book === 'civil' ? null : loadBuiltInCatalog()])
       .then(([s, b]) => {
         if (!live) return;
         setSaved(s);
         setBuiltIn(b);
+        setLoaded(true);
       })
       .catch(() => live && setFailed(true));
     return () => {
       live = false;
     };
-  }, []);
+  }, [book]);
 
   const catalog = saved?.catalog ?? builtIn;
+  const added = useMemo(() => new Set(saved?.added ?? []), [saved]);
+  // Civil schedules of rates mostly have one rate per item; erection and T&C columns only when a sheet has them.
+  const childRates = !civilBook || (catalog?.items ?? []).some((i) => i.labour.length > 0 || i.tc.length > 0);
   const edits = useMemo(() => saved?.edits ?? {}, [saved]);
   const sheets = useMemo(() => [...new Set((catalog?.items ?? []).map((i) => i.sheet))], [catalog]);
   const priced = useMemo(() => (catalog?.items ?? []).filter((i) => i.rate !== null && i.rate > 0).length, [catalog]);
@@ -122,7 +237,7 @@ export function RateCatalogPage() {
 
   const keep = async (next: SavedCatalog, done: string) => {
     setSaved(next);
-    const ok = await saveCatalog(next);
+    const ok = await saveCatalog(next, book);
     toast(ok ? { title: done, tone: 'success' } : { title: done, description: 'This browser would not keep it, so it lasts until the page is closed.', tone: 'error' });
   };
 
@@ -141,6 +256,7 @@ export function RateCatalogPage() {
         savedAt: saved?.savedAt ?? new Date().toISOString(),
         fileName: saved?.fileName ?? '',
         edits: nextEdits,
+        added: saved?.added,
       },
       `Rate saved for ${item.code || item.item.slice(0, 40)}`,
     );
@@ -156,11 +272,12 @@ export function RateCatalogPage() {
   };
 
   const pick = async (file: File | undefined) => {
-    if (!file || !catalog) return;
+    if (!file || (!catalog && !civilBook)) return;
     setReading(true);
     try {
-      const read = adoptIds(catalog, await readCatalogFile(await blobBytes(file), file.name));
-      setPending({ catalog: read, fileName: file.name, diff: diffCatalogs(catalog, read) });
+      const prev = catalog ?? { source: '', items: [] };
+      const read = adoptIds(prev, await readCatalogFile(await blobBytes(file), file.name, civilBook ? 'civil' : undefined));
+      setPending({ catalog: read, fileName: file.name, diff: diffCatalogs(prev, read) });
     } catch (e) {
       toast({ title: 'Catalog not read', description: e instanceof Error ? e.message : String(e), tone: 'error' });
     } finally {
@@ -177,6 +294,13 @@ export function RateCatalogPage() {
   };
 
   const restore = async () => {
+    if (civilBook) {
+      await removeCivilCatalog();
+      setSaved(null);
+      setConfirmRestore(false);
+      toast({ title: 'Civil catalog removed', description: 'Civil items are matched against the electrical SoR’s civil sheet only.', tone: 'success' });
+      return;
+    }
     await restoreBuiltInCatalog();
     setSaved(null);
     setConfirmRestore(false);
@@ -185,42 +309,85 @@ export function RateCatalogPage() {
 
   const download = async () => {
     if (!catalog) return;
-    const data = await catalogToWorkbook(catalog);
-    const url = URL.createObjectURL(new Blob([data], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = /\.xlsx$/i.test(catalog.source) ? catalog.source : `${catalogName(catalog)}.xlsx`;
-    a.click();
-    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    saveBlob(await catalogToWorkbook(catalog), /\.xlsx$/i.test(catalog.source) ? catalog.source : `${catalogName(catalog)}.xlsx`);
+  };
+
+  /** An empty workbook in the catalog's layout, to fill in from the civil schedule of rates and upload. */
+  const downloadTemplate = async () => {
+    const { default: ExcelJS } = await import('exceljs');
+    const wb = new ExcelJS.Workbook();
+    wb.creator = 'DPR Manager';
+    const ws = wb.addWorksheet(TYPED_CIVIL);
+    ws.addRow(HEADERS).font = { bold: true };
+    ws.columns = [10, 10, 90, 10, 16, 16, 20].map((width) => ({ width }));
+    ws.views = [{ state: 'frozen', ySplit: 1 }];
+    saveBlob((await wb.xlsx.writeBuffer()) as ArrayBuffer, 'civil_rate_catalog.xlsx');
+  };
+
+  const addItem = (fields: Omit<CatalogItem, 'id' | 'labour' | 'tc' | 'kind' | 'context'>) => {
+    const base = catalog ?? { source: TYPED_CIVIL, version: null, items: [] };
+    const item: CatalogItem = { ...fields, id: `civil:added#${Date.now().toString(36)}${Math.random().toString(36).slice(2, 6)}`, kind: 'Item', context: '', labour: [], tc: [] };
+    void keep(
+      {
+        catalog: { ...base, items: [...base.items, item] },
+        savedAt: saved?.savedAt ?? new Date().toISOString(),
+        fileName: saved?.fileName ?? '',
+        edits,
+        added: [...(saved?.added ?? []), item.id],
+      },
+      `Added ${item.code || item.item.slice(0, 40)}`,
+    );
+  };
+
+  const removeItem = (item: CatalogItem) => {
+    if (!catalog || !saved) return;
+    const nextEdits = { ...edits };
+    delete nextEdits[item.id];
+    const items = catalog.items.filter((i) => i.id !== item.id);
+    if (!items.length) return void restore();
+    void keep({ ...saved, catalog: { ...catalog, items }, edits: nextEdits, added: saved.added?.filter((id) => id !== item.id) }, `Removed ${item.code || item.item.slice(0, 40)}`);
   };
 
   const editedCount = Object.keys(edits).length;
-  const facts = [
-    { label: 'Catalog in use', value: catalog ? catalogName(catalog) : '…' },
-    { label: 'Items with a rate', value: catalog ? formatNumber(priced) : '…' },
-    { label: 'Source', value: saved ? (saved.fileName ? `Uploaded ${when(saved.savedAt)}` : 'Built-in, edited here') : 'Built-in (shipped with the app)' },
-    { label: 'Rates changed by hand', value: formatNumber(editedCount) },
-  ];
+  const facts = civilBook
+    ? [
+        { label: 'Civil catalog in use', value: !loaded ? '…' : catalog ? catalogName(catalog) : 'None yet' },
+        { label: 'Items with a rate', value: !loaded ? '…' : formatNumber(priced) },
+        { label: 'Source', value: !loaded ? '…' : saved ? (saved.fileName ? `Uploaded ${when(saved.savedAt)}` : 'Typed in here') : '—' },
+        { label: 'Added or changed by hand', value: formatNumber(added.size + Object.keys(edits).filter((id) => !added.has(id)).length) },
+      ]
+    : [
+        { label: 'Catalog in use', value: catalog ? catalogName(catalog) : '…' },
+        { label: 'Items with a rate', value: catalog ? formatNumber(priced) : '…' },
+        { label: 'Source', value: saved ? (saved.fileName ? `Uploaded ${when(saved.savedAt)}` : 'Built-in, edited here') : 'Built-in (shipped with the app)' },
+        { label: 'Rates changed by hand', value: formatNumber(editedCount) },
+      ];
 
   return (
     <div className="mx-auto max-w-7xl px-4 py-8 sm:px-6 lg:px-8">
       <PageHeader
         title="Rate Catalog"
-        description="Every BOQ rate is matched against this catalog. When the SoR rates change, upload the new catalog or change a rate here; the BOQ review and “Price from the rate catalog” use it straight away."
+        description={
+          civilBook
+            ? 'Civil BOQ items (foundations, buildings, roads, fencing) are matched against this civil schedule of rates as well as the SoR. Upload the civil SR workbook or add items by hand; the BOQ review and “Price from the rate catalog” use it straight away.'
+            : 'Every BOQ rate is matched against this catalog. When the SoR rates change, upload the new catalog or change a rate here; the BOQ review and “Price from the rate catalog” use it straight away.'
+        }
         actions={
           <>
             <button type="button" className="btn-secondary" onClick={() => void download()} disabled={!catalog}>
               <Download className="h-4 w-4" aria-hidden />
               Download Excel
             </button>
-            <button type="button" className="btn-primary" onClick={() => fileInput.current?.click()} disabled={!catalog || reading}>
+            <button type="button" className="btn-primary" onClick={() => fileInput.current?.click()} disabled={(!catalog && !(civilBook && loaded)) || reading}>
               <Upload className="h-4 w-4" aria-hidden />
-              {reading ? 'Reading…' : 'Upload new catalog'}
+              {reading ? 'Reading…' : civilBook && !catalog ? 'Upload civil catalog' : 'Upload new catalog'}
             </button>
-            <input ref={fileInput} type="file" accept=".xlsx,.xlsm,.xls" aria-label="Rate catalog workbook" className="sr-only" onChange={(e) => void pick(e.target.files?.[0])} />
+            <input ref={fileInput} type="file" accept=".xlsx,.xlsm,.xls" aria-label={civilBook ? 'Civil rate catalog workbook' : 'Rate catalog workbook'} className="sr-only" onChange={(e) => void pick(e.target.files?.[0])} />
           </>
         }
       />
+
+      <BookTabs book={book} onBook={onBook} />
 
       <section aria-label="Catalog summary" className="mb-4">
         <dl className="grid grid-cols-2 gap-px overflow-hidden rounded-lg border border-gray-200 bg-gray-200 lg:grid-cols-4">
@@ -236,9 +403,9 @@ export function RateCatalogPage() {
           {saved &&
             (confirmRestore ? (
               <span className="flex items-center gap-2 text-gray-700">
-                Drop the uploaded catalog and every rate changed by hand?
+                {civilBook ? 'Remove the civil catalog and every item in it?' : 'Drop the uploaded catalog and every rate changed by hand?'}
                 <button type="button" className="btn-secondary h-7 px-2 text-xs" onClick={() => void restore()}>
-                  Yes, use the built-in catalog
+                  {civilBook ? 'Yes, remove it' : 'Yes, use the built-in catalog'}
                 </button>
                 <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => setConfirmRestore(false)}>
                   Cancel
@@ -247,7 +414,7 @@ export function RateCatalogPage() {
             ) : (
               <button type="button" className="inline-flex items-center gap-1 text-gray-700 underline-offset-2 hover:underline" onClick={() => setConfirmRestore(true)}>
                 <RotateCcw className="h-3.5 w-3.5" aria-hidden />
-                Go back to the built-in catalog
+                {civilBook ? 'Remove the civil catalog' : 'Go back to the built-in catalog'}
               </button>
             ))}
         </div>
@@ -261,12 +428,19 @@ export function RateCatalogPage() {
             subtitle={`${formatNumber(pending.catalog.items.length)} items read from ${new Set(pending.catalog.items.map((i) => i.sheet)).size} sheets. Nothing changes until you use it.`}
           />
           <div className="space-y-2 px-4 py-3 text-[13px] text-gray-700">
+            {!catalog ? (
+              <p>
+                <strong className="text-gray-900">{formatNumber(pending.catalog.items.filter((i) => i.rate !== null && i.rate > 0).length)}</strong> items with a rate. Civil BOQ items will be matched against them as well as the SoR.
+              </p>
+            ) : (
             <p>
               Compared with {catalogName(catalog)}: <strong className="text-gray-900">{pending.diff.changed.length}</strong> supply {pending.diff.changed.length === 1 ? 'rate changes' : 'rates change'},{' '}
               <strong className="text-gray-900">{pending.diff.added}</strong> {pending.diff.added === 1 ? 'item is' : 'items are'} new and{' '}
               <strong className="text-gray-900">{pending.diff.removed}</strong> {pending.diff.removed === 1 ? 'is' : 'are'} no longer in it.
               {editedCount > 0 && ` The ${editedCount} ${editedCount === 1 ? 'rate' : 'rates'} changed by hand are replaced by the file.`}
+              {added.size > 0 && ` The ${added.size} ${added.size === 1 ? 'item' : 'items'} added by hand are dropped unless the file has them.`}
             </p>
+            )}
             {pending.diff.changed.length > 0 && (
               <ul className="max-h-48 divide-y divide-gray-100 overflow-y-auto rounded-md border border-gray-200">
                 {pending.diff.changed.slice(0, 50).map(({ item, was }) => (
@@ -280,7 +454,7 @@ export function RateCatalogPage() {
                 {pending.diff.changed.length > 50 && <li className="px-3 py-1.5 text-gray-500">…and {pending.diff.changed.length - 50} more.</li>}
               </ul>
             )}
-            {pending.diff.removed > pending.catalog.items.length / 2 && (
+            {catalog && pending.diff.removed > pending.catalog.items.length / 2 && (
               <p role="alert" className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-amber-900">
                 <TriangleAlert className="mt-0.5 h-4 w-4 shrink-0" aria-hidden />
                 Most items of the current catalog are not in this file. Check it is the full catalog, not one sheet of it.
@@ -302,44 +476,81 @@ export function RateCatalogPage() {
         <CardHeader
           id="catalog-items-title"
           title="Items and rates"
-          subtitle="Click a rate to change it; it is saved when you leave the field. Changed rates are shown in amber and can be put back."
+          subtitle={
+            civilBook && !catalog
+              ? 'No civil catalog yet.'
+              : 'Click a rate to change it; it is saved when you leave the field. Changed rates are shown in amber and can be put back.'
+          }
           action={
             <div className="flex flex-wrap items-center gap-2">
-              <label className="relative">
-                <span className="sr-only">Search the catalog</span>
-                <Search className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" aria-hidden />
-                <input
-                  type="search"
-                  value={query}
-                  onChange={(e) => (setQuery(e.target.value), setPage(1))}
-                  placeholder="Code or words, e.g. 1.10"
-                  className="input h-8 w-64 pl-8 text-[13px]"
-                />
-              </label>
-              <select aria-label="Sheet" value={sheet} onChange={(e) => (setSheet(e.target.value), setPage(1))} className="input h-8 w-auto text-[13px]">
-                <option value="">All sheets</option>
-                {sheets.map((s) => (
-                  <option key={s} value={s}>
-                    {s}
-                  </option>
-                ))}
-              </select>
-              <label className="flex items-center gap-1.5 text-[13px] text-gray-700">
-                <input type="checkbox" checked={onlyEdited} onChange={(e) => (setOnlyEdited(e.target.checked), setPage(1))} />
-                Only changed rates
-              </label>
+              {civilBook && loaded && (
+                <button type="button" className="btn-secondary h-8" onClick={() => setAdding((a) => !a)} aria-expanded={adding}>
+                  <Plus className="h-4 w-4" aria-hidden />
+                  Add an item
+                </button>
+              )}
+              {(catalog || !civilBook) && (
+                <>
+                  <label className="relative">
+                    <span className="sr-only">Search the catalog</span>
+                    <Search className="pointer-events-none absolute left-2 top-1/2 h-4 w-4 -translate-y-1/2 text-gray-400" aria-hidden />
+                    <input
+                      type="search"
+                      value={query}
+                      onChange={(e) => (setQuery(e.target.value), setPage(1))}
+                      placeholder="Code or words, e.g. 1.10"
+                      className="input h-8 w-64 pl-8 text-[13px]"
+                    />
+                  </label>
+                  <select aria-label="Sheet" value={sheet} onChange={(e) => (setSheet(e.target.value), setPage(1))} className="input h-8 w-auto text-[13px]">
+                    <option value="">All sheets</option>
+                    {sheets.map((s) => (
+                      <option key={s} value={s}>
+                        {s}
+                      </option>
+                    ))}
+                  </select>
+                  <label className="flex items-center gap-1.5 text-[13px] text-gray-700">
+                    <input type="checkbox" checked={onlyEdited} onChange={(e) => (setOnlyEdited(e.target.checked), setPage(1))} />
+                    Only changed rates
+                  </label>
+                </>
+              )}
             </div>
           }
         />
+        {adding && <AddItemForm sheets={sheets} onAdd={addItem} onClose={() => setAdding(false)} />}
         {failed ? (
           <EmptyState icon={TriangleAlert} title="The rate catalog could not be loaded" hint="Reload the page to try again." />
+        ) : civilBook && loaded && !catalog ? (
+          <div className="px-4 py-8 text-center text-[13px] text-gray-600">
+            <BookOpen className="mx-auto mb-2 h-6 w-6 text-gray-400" aria-hidden />
+            <p className="font-medium text-gray-900">Add the civil schedule of rates</p>
+            <p className="mx-auto mt-1 max-w-xl">
+              Upload the civil SR workbook (any sheet with a header row naming a description and a rate column, for example Item No | Description | Unit | Rate), or add items one by one. Until then civil items are matched against the SoR’s civil sheet only.
+            </p>
+            <div className="mt-3 flex flex-wrap justify-center gap-2">
+              <button type="button" className="btn-primary" onClick={() => fileInput.current?.click()} disabled={reading}>
+                <Upload className="h-4 w-4" aria-hidden />
+                Upload civil catalog
+              </button>
+              <button type="button" className="btn-secondary" onClick={() => setAdding(true)}>
+                <Plus className="h-4 w-4" aria-hidden />
+                Add an item
+              </button>
+              <button type="button" className="btn-ghost" onClick={() => void downloadTemplate()}>
+                <Download className="h-4 w-4" aria-hidden />
+                Download a blank template
+              </button>
+            </div>
+          </div>
         ) : !catalog ? (
           <p className="px-4 py-6 text-[13px] text-gray-500">Loading the rate catalog…</p>
         ) : rows.length === 0 ? (
           <EmptyState icon={BookOpen} title="No items match" hint={onlyEdited ? 'No rate has been changed by hand.' : 'Try fewer words, or a code like 1.10.'} />
         ) : (
           <div className="relative overflow-x-auto">
-            <table className="w-full min-w-[1100px] table-fixed text-[13px]">
+            <table className={`w-full table-fixed text-[13px] ${childRates ? 'min-w-[1100px]' : 'min-w-[760px]'}`}>
               <thead>
                 <tr className="border-b border-gray-200 bg-gray-50 text-left text-xs text-gray-500">
                   <th scope="col" className="w-20 px-2 py-2 pl-4 font-medium">
@@ -352,17 +563,26 @@ export function RateCatalogPage() {
                     Unit
                   </th>
                   <th scope="col" className="w-32 px-2 py-2 text-right font-medium">
-                    Supply rate
+                    {civilBook ? 'Rate' : 'Supply rate'}
                   </th>
-                  <th scope="col" className="w-64 px-2 py-2 text-right font-medium">
-                    Erection rates
-                  </th>
-                  <th scope="col" className="w-64 px-2 py-2 text-right font-medium">
-                    T&amp;C rates
-                  </th>
+                  {childRates && (
+                    <>
+                      <th scope="col" className="w-64 px-2 py-2 text-right font-medium">
+                        Erection rates
+                      </th>
+                      <th scope="col" className="w-64 px-2 py-2 text-right font-medium">
+                        T&amp;C rates
+                      </th>
+                    </>
+                  )}
                   <th scope="col" className="w-24 px-2 py-2 pr-4 font-medium">
                     SR ref
                   </th>
+                  {civilBook && (
+                    <th scope="col" className="w-12 px-2 py-2 pr-4">
+                      <span className="sr-only">Remove</span>
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody>
@@ -379,6 +599,7 @@ export function RateCatalogPage() {
                         <span className="line-clamp-3 text-gray-900" title={i.item}>
                           {i.item}
                         </span>
+                        {added.has(i.id) && <span className="mt-1 block text-xs text-gray-500">Added by hand</span>}
                         {e && (
                           <span className="mt-1 flex flex-wrap items-center gap-2 text-xs text-amber-800">
                             Changed {when(e.at)}; was {rs(e.was.rate)}
@@ -391,15 +612,26 @@ export function RateCatalogPage() {
                       </td>
                       <td className="px-2 py-2 text-gray-700">{i.unit}</td>
                       <td className="px-2 py-1.5 text-right">
-                        <RateInput value={i.rate} label={`Supply rate, ${i.code || i.item.slice(0, 30)}`} onCommit={(n) => changeRate(i, 'rate', n)} edited={e != null && e.was.rate !== i.rate} />
+                        <RateInput value={i.rate} label={`${civilBook ? 'Rate' : 'Supply rate'}, ${i.code || i.item.slice(0, 30)}`} onCommit={(n) => changeRate(i, 'rate', n)} edited={e != null && e.was.rate !== i.rate} />
                       </td>
-                      <td className="px-2 py-1.5">
-                        <ChildRates item={i} kind="labour" label="Erection" edit={e} onChange={(n, k) => changeRate(i, 'labour', n, k)} />
-                      </td>
-                      <td className="px-2 py-1.5">
-                        <ChildRates item={i} kind="tc" label="T&C" edit={e} onChange={(n, k) => changeRate(i, 'tc', n, k)} />
-                      </td>
+                      {childRates && (
+                        <>
+                          <td className="px-2 py-1.5">
+                            <ChildRates item={i} kind="labour" label="Erection" edit={e} onChange={(n, k) => changeRate(i, 'labour', n, k)} />
+                          </td>
+                          <td className="px-2 py-1.5">
+                            <ChildRates item={i} kind="tc" label="T&C" edit={e} onChange={(n, k) => changeRate(i, 'tc', n, k)} />
+                          </td>
+                        </>
+                      )}
                       <td className="px-2 py-2 pr-4 text-xs text-gray-500">{i.sr}</td>
+                      {civilBook && (
+                        <td className="px-2 py-1.5 pr-4 text-right">
+                          <button type="button" className="btn-ghost h-7 px-1.5 text-gray-500 hover:text-rose-700" onClick={() => removeItem(i)} aria-label={`Remove ${i.code || i.item.slice(0, 30)}`} title="Remove this item">
+                            <Trash2 className="h-4 w-4" aria-hidden />
+                          </button>
+                        </td>
+                      )}
                     </tr>
                   );
                 })}
@@ -407,7 +639,7 @@ export function RateCatalogPage() {
             </table>
           </div>
         )}
-        <Pagination page={current} pageCount={pageCount} total={filtered.length} pageSize={PAGE_SIZE} onPage={setPage} />
+        {catalog && <Pagination page={current} pageCount={pageCount} total={filtered.length} pageSize={PAGE_SIZE} onPage={setPage} />}
       </Card>
     </div>
   );

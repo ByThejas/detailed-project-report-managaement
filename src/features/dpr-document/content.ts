@@ -37,6 +37,7 @@ export const DETAIL_FIELDS = [
   { key: 'financialYear', label: 'Financial year', group: 'cover', placeholder: 'e.g. FY 2026-27' },
   { key: 'jurisdiction', label: 'Jurisdiction', group: 'cover', placeholder: 'e.g. Tumakuru Operation Zone' },
   { key: 'projectNature', label: 'Project nature', group: 'cover', placeholder: 'e.g. Brown Field — Additional Transformer + LILO' },
+  { key: 'coverTitle', label: 'Title on the cover (if shorter than the name of work)', group: 'cover', optional: true, multiline: true, placeholder: 'e.g. Providing additional 1×20 MVA, 66/11 kV power transformer at 66/11 kV Thyavanige substation, with 66 kV LILO arrangement …' },
   { key: 'coverSubtitle', label: 'Taluk and district (cover)', group: 'cover', placeholder: 'e.g. Channagiri Taluk, Davanagere District.' },
   { key: 'runningTitle', label: 'Running title (page footer)', group: 'cover', placeholder: 'e.g. 66/11 kV Thyavanige station — additional 1×20 MVA transformer and LILO arrangement' },
   { key: 'preparedBy', label: 'Prepared by', group: 'cover', placeholder: 'e.g. Prasanna Technologies Pvt. Ltd.' },
@@ -127,6 +128,7 @@ export function defaultContent(dpr: DprRow, lineWorks = false, lineOnly = false)
       approval: '',
       budgetProvision: '',
       apwCode: '',
+      coverTitle: '',
       financialYear: '',
       jurisdiction: dpr.zone ? `${dpr.zone} Zone` : '',
       projectNature: brownfield ? 'Brown Field' : 'Green Field',
@@ -213,23 +215,69 @@ export function letteredSections(lineWorks: boolean, noBcr = false): { letter: s
   return out;
 }
 
-/** What still has to be written before the DPR stops being a draft. */
-export function contentGaps(c: DprContent, lineWorks = false, noBcr = false): string[] {
-  const gaps: string[] = [];
+/** One thing still to write: what it is, where it is on the Report text step, and how to fill it in. */
+export interface ContentGap {
+  label: string;
+  /** The data-fix anchor of the field on the Report text step. */
+  target: string;
+  how: string;
+}
+
+const GROUP_TITLE: Record<DetailField['group'], string> = {
+  glance: '01 Project at a glance',
+  cover: 'Cover and page footer',
+  abstract: 'General abstract',
+};
+
+/** What still has to be written before the DPR stops being a draft, with where and how to fix each. */
+export function contentGapItems(c: DprContent, lineWorks = false, noBcr = false): ContentGap[] {
+  const gaps: ContentGap[] = [];
+  const draftHint = 'or press Generate beside it to draft it from your uploaded documents';
   for (const f of DETAIL_FIELDS as readonly DetailField[]) {
     if (!applies(f, lineWorks) || f.optional) continue;
     const v = c.details[f.key as DetailKey]?.trim();
-    if (!v || PLACEHOLDER.test(v)) gaps.push(f.label);
+    if (v && !PLACEHOLDER.test(v)) continue;
+    const example = f.placeholder ? ` For example: ${f.placeholder.replace(/^e\.g\.\s*/, '')}` : '';
+    gaps.push({
+      label: f.label,
+      target: `detail:${f.key}`,
+      how: v
+        ? `Replace the [bracketed] note in “${f.label}” (${GROUP_TITLE[f.group]}) with this project’s own text, ${draftHint}.`
+        : `Type “${f.label}” in the ${GROUP_TITLE[f.group]} box, ${draftHint}.${example}`,
+    });
   }
   for (const { letter, parts } of letteredSections(lineWorks, noBcr)) {
     for (const s of parts) {
       const v = c.sections[s.key]?.trim();
-      if (!v || PLACEHOLDER.test(v)) gaps.push(`${letter}. ${s.title}`);
+      if (v && !PLACEHOLDER.test(v)) continue;
+      gaps.push({
+        label: `${letter}. ${s.title}`,
+        target: `section:${s.key}`,
+        how: v
+          ? `In “${letter}. ${s.title}” under 02 Project report, replace every [bracketed] note with this project’s own text, ${draftHint}.`
+          : `Write “${letter}. ${s.title}” under 02 Project report, ${draftHint}.`,
+      });
     }
   }
-  if (lineWorks && !c.tables.towers.rows.some((r) => r.slice(1).some((x) => x.trim()))) gaps.push('Tower schedule table');
-  for (const r of c.salient) if (!r.value.trim() || PLACEHOLDER.test(r.value)) gaps.push(`Salient features: ${r.label}`);
+  if (lineWorks && !c.tables.towers.rows.some((r) => r.slice(1).some((x) => x.trim()))) {
+    gaps.push({ label: 'Tower schedule table', target: 'table:towers', how: 'In the “Proposed towers” table under Tower schedule, fill one row per tower type (e.g. DA, DB, DC) with how many are needed. Use “Add row” for more types.' });
+  }
+  c.salient.forEach((r, i) => {
+    if (r.value.trim() && !PLACEHOLDER.test(r.value)) return;
+    gaps.push({
+      label: `Salient features: ${r.label}`,
+      target: `salient:${i}`,
+      how: r.value.trim()
+        ? `In Salient features, “${r.label || `row ${i + 1}`}”: replace the [bracketed] notes (letter number, date and so on) with the real values, ${draftHint}. Delete the row if it does not apply.`
+        : `Write the “${r.label || `row ${i + 1}`}” salient feature, or delete the row if it does not apply.`,
+    });
+  });
   return gaps;
+}
+
+/** What still has to be written before the DPR stops being a draft. */
+export function contentGaps(c: DprContent, lineWorks = false, noBcr = false): string[] {
+  return contentGapItems(c, lineWorks, noBcr).map((g) => g.label);
 }
 
 /**

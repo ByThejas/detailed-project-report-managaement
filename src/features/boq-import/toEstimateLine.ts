@@ -2,29 +2,47 @@ import { SECTION_KEYS, lineAmounts } from '@/features/preparation/calc';
 import { newLine } from '@/features/preparation/template';
 import { isMultiRate, type Estimate, type EstimateLine, type EstimateSection } from '@/features/preparation/types';
 import type { BoqReadResult, ParsedItem, StatedAbstract } from './types';
+import { itemAmount } from './parse';
 
 /** BOQ part a sheet's items go to: the sheet's own (from its name), else the document's. */
 export const sectionOfItem = (item: Pick<ParsedItem, 'sheet'>, read: BoqReadResult): EstimateSection =>
   read.sheets.find((s) => s.name === item.sheet)?.section ?? read.section;
 
 /** A reviewed item as a BOQ line, remembering the file and row it came from. */
-export function toEstimateLine(item: ParsedItem, read: BoqReadResult): EstimateLine {
+export function toEstimateLine(item: ParsedItem, read: BoqReadResult, imported?: Set<string>, carried: ParsedItem['headings'] = []): EstimateLine {
   const section = sectionOfItem(item, read);
   const multi = isMultiRate(section);
   const where = `${read.fileName} · ${item.sheet} row ${item.row}`;
+  const qty = item.qty ?? 0;
+  const oneRate = item.supplyRate + item.erectionRate + item.testingRate;
+  // The file's amounts go with the line, so it shows them even where they are not qty × rate.
+  let fileAmounts: EstimateLine['fileAmounts'];
+  if (item.fileAmounts && Object.keys(item.fileAmounts).length) {
+    if (multi) fileAmounts = { ...item.fileAmounts };
+    else {
+      const amount = (['supply', 'erection', 'testing'] as const).reduce((s, k) => s + itemAmount(item, k), 0);
+      fileAmounts = { supply: { qty, rate: oneRate, amount } };
+    }
+  }
+  // Heading rows above the item, as the file prints them. One the user chose to import as an item itself is left out.
+  const headings = [...carried, ...(item.headings ?? [])].filter((h) => !imported?.has(`${item.sheet}|${h.row}`)).map(({ code, text }) => ({ code, text }));
+  // The description is the file's own; the heading of a sub-item ("a)") is printed above it and kept for matching.
+  const group = [...new Set([item.group, item.heading].filter((h): h is string => Boolean(h)))].join(' · ');
   return {
     ...newLine(section, item.code),
-    description: item.heading ? `${item.heading} — ${item.description}` : item.description,
+    description: item.description,
     unit: item.unit,
-    qty: item.qty ?? 0,
+    qty,
     // Civil and dismantling have one rate. A dismantling sheet keeps it under "Labour cost" or "Erection", so
     // whatever rates the row has are added into that one rate rather than dropped.
-    supplyRate: multi ? item.supplyRate : item.supplyRate + item.erectionRate + item.testingRate,
+    supplyRate: multi ? item.supplyRate : oneRate,
     erectionRate: multi ? item.erectionRate : 0,
     testingRate: multi ? item.testingRate : 0,
     source: item.srRef ? `${where} · SR ${item.srRef}` : where,
     ...(item.srCode ? { srCode: item.srCode } : {}),
-    ...(item.group ? { group: item.group } : {}),
+    ...(group ? { group } : {}),
+    ...(fileAmounts ? { fileAmounts } : {}),
+    ...(headings.length ? { headings } : {}),
   };
 }
 
@@ -67,7 +85,20 @@ const abstractFor = (read: BoqReadResult, part: StatedAbstract['part']) =>
  * keeps the total right even after a quantity is corrected in the review.
  */
 export function planImport(read: BoqReadResult, items: ParsedItem[], includedSheets: Set<string>, withCharges = true): ImportPlan {
-  const lines = items.map((i) => toEstimateLine(i, read));
+  const imported = new Set(items.map((i) => `${i.sheet}|${i.row}`));
+  // Heading rows above an item that is not imported go above the next imported item of its sheet, so they are not lost.
+  const chosen = new Set(items.map((i) => i.id));
+  const carry = new Map<string, NonNullable<ParsedItem['headings']>>();
+  const carried = new Map<string, NonNullable<ParsedItem['headings']>>();
+  for (const i of read.items) {
+    const left = carry.get(i.sheet) ?? [];
+    if (!chosen.has(i.id)) carry.set(i.sheet, [...left, ...(i.headings ?? [])]);
+    else if (left.length) {
+      carried.set(i.id, left);
+      carry.delete(i.sheet);
+    }
+  }
+  const lines = items.map((i) => toEstimateLine(i, read, imported, carried.get(i.id)));
   const sections = [...new Set(lines.map((l) => l.section))];
   const misc: Partial<Misc> = {};
   const notes: string[] = [];
@@ -141,4 +172,46 @@ export function applyImport(e: Estimate, plan: ImportPlan, mode: ImportMode): Es
   }
   for (const [k, v] of Object.entries(plan.misc) as [keyof Misc, number][]) misc[k] = mode === 'replace' ? v : (misc[k] ?? 0) + v;
   return { ...e, ...plan.charges, lines: [...kept, ...plan.lines], misc };
+}
+
+const SOURCE = /^(.*) · (.+) row (\d+)(?: · |$)/;
+const HEADING_ROW = /^No quantity \(heading or note\)$|^No description or quantity$|^Quantity column reads/;
+const isHeading = (code: string, text: string) => Boolean(code) || (Boolean(text) && !/^\(?\s*notes?\b/i.test(text));
+
+/**
+ * Lines imported before heading rows were kept get them back from the file's reading saved with the DPR: the rows
+ * with no quantity between the line and the imported line above it (after any total row), as the file prints them.
+ * The heading that was joined onto a sub-item's description ("Heading — a) item") is taken off it again.
+ */
+export function addFileHeadings(e: Estimate, reads: BoqReadResult[]): Estimate {
+  if (!reads.length || e.lines.every((l) => l.headings || !l.source)) return e;
+  const at = (l: EstimateLine) => {
+    const m = l.source ? SOURCE.exec(l.source) : null;
+    return m ? { file: m[1]!, sheet: m[2]!, row: Number(m[3]) } : null;
+  };
+  const imported = new Map<string, number[]>();
+  for (const l of e.lines) {
+    const p = at(l);
+    if (p) imported.set(`${p.file}|${p.sheet}`, [...(imported.get(`${p.file}|${p.sheet}`) ?? []), p.row]);
+  }
+  let changed = false;
+  const lines = e.lines.map((l) => {
+    const p = l.headings ? null : at(l);
+    const read = p && reads.find((r) => r.fileName === p.file);
+    if (!p || !read) return l;
+    const rows = imported.get(`${p.file}|${p.sheet}`) ?? [];
+    const above = Math.max(0, ...rows.filter((r) => r < p.row));
+    const between = read.skipped.filter((s) => s.sheet === p.sheet && s.row > above && s.row < p.row).sort((a, b) => a.row - b.row);
+    const lastTotal = Math.max(0, ...between.filter((s) => /^Total row/.test(s.reason)).map((s) => s.row));
+    const headings = between
+      .filter((s) => s.row > lastTotal && HEADING_ROW.test(s.reason) && !rows.includes(s.row))
+      // A row with a Sl. No. and no description was saved with its cells joined as the description.
+      .map((s) => ({ code: s.code, text: /^No description/.test(s.reason) ? '' : s.description }))
+      .filter((h) => isHeading(h.code, h.text));
+    if (!headings.length) return l;
+    changed = true;
+    const joined = headings.find((h) => h.text && l.description.startsWith(`${h.text} — `));
+    return { ...l, headings, ...(joined ? { description: l.description.slice(joined.text.length + 3) } : {}) };
+  });
+  return changed ? { ...e, lines } : e;
 }

@@ -1,4 +1,5 @@
 import type { EstimateLine } from '@/features/preparation/types';
+import { effectiveRate } from '@/features/preparation/calc';
 import { readFileSync, readdirSync, statSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -49,7 +50,10 @@ it.skipIf(!ROOT || !existsSync(ROOT))('match eval', async () => {
   for (const { f, lines } of all) {
     const job = process.env.NOJOB ? [] : jobContext(lines);
     for (const l0 of lines) {
-      const l = { ...l0, basis: { tonnes: tonnesPerNo(l0) }, job };
+      // Rates per unit of the line's quantity (a per-MT file rate on a line counted in Nos works out per No), as before
+      // lines kept the file's own rate and amount.
+      const per = { supplyRate: effectiveRate(l0, 'supply'), erectionRate: effectiveRate(l0, 'erection'), testingRate: effectiveRate(l0, 'testing') };
+      const l = { ...l0, ...per, fileAmounts: undefined, basis: { tonnes: tonnesPerNo(l0) }, job };
       if (!(l.supplyRate > 0) || l.section === 'dismantling' || isLabourOnly(l.description)) continue;
       const key = `${l.section}|${l.description}|${l.unit}|${l.supplyRate}`;
       if (seen.has(key)) continue; // the same line in two copies of a workbook counts once

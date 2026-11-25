@@ -13,6 +13,10 @@ export interface CrossCheck {
   severity: 'blocker' | 'warning';
   message: string;
   step: 'inputs' | 'estimate' | 'finance' | 'text';
+  /** The data-fix anchor of the field to change, on that step. */
+  target?: string;
+  /** What to do about it, in plain words. */
+  how: string;
 }
 
 /** A blocker the user has seen and accepted, with why. Tied to the message, so a new mismatch needs a new note. */
@@ -70,41 +74,41 @@ export function crossChecks(dpr: DprRow, e: Estimate, content: DprContent, abstr
   for (const l of pts) {
     const r = mvaRatings(l.description);
     if (unit && r.length && !r.includes(unit)) {
-      out.push({ id: `pt-mva:${l.id}`, severity: 'blocker', step: 'estimate', message: `Item ${l.code || '?'} prices a ${r.join('/')} MVA transformer, but the DPR is for ${dpr.capacity}.` });
+      out.push({ id: `pt-mva:${l.id}`, severity: 'blocker', step: 'estimate', message: `Item ${l.code || '?'} prices a ${r.join('/')} MVA transformer, but the DPR is for ${dpr.capacity}.`, target: `line:${l.id}`, how: `Change item ${l.code || '?'} to a ${unit} MVA transformer (description and rate), or, if the DPR capacity is the wrong one, correct it in DPR Initialization. If both are right (e.g. a replacement), press “It is correct…” on the Generate DPR step and say why.` });
     }
     const hv = highestKv(l.description);
     if (kv && hv && hv !== kv) {
-      out.push({ id: `pt-kv:${l.id}`, severity: 'blocker', step: 'estimate', message: `Item ${l.code || '?'} is a ${hv} kV transformer, but the DPR is for ${dpr.voltage}.` });
+      out.push({ id: `pt-kv:${l.id}`, severity: 'blocker', step: 'estimate', message: `Item ${l.code || '?'} is a ${hv} kV transformer, but the DPR is for ${dpr.voltage}.`, target: `line:${l.id}`, how: `Correct the voltage ratio in item ${l.code || '?'} to ${dpr.voltage}, or correct the DPR voltage in DPR Initialization.` });
     }
   }
   const ptQty = pts.filter((l) => !unit || mvaRatings(l.description).includes(unit)).reduce((s, l) => s + l.qty, 0);
   if (unit && pts.length && ptQty > 0 && ptQty !== unitCount(dpr.capacity)) {
-    out.push({ id: 'pt-qty', severity: 'warning', step: 'estimate', message: `The estimate has ${fmt(ptQty)} transformers of ${unit} MVA; the DPR capacity ${dpr.capacity} means ${unitCount(dpr.capacity)}.` });
+    out.push({ id: 'pt-qty', severity: 'warning', step: 'estimate', message: `The estimate has ${fmt(ptQty)} transformers of ${unit} MVA; the DPR capacity ${dpr.capacity} means ${unitCount(dpr.capacity)}.`, target: `line:${pts[0]!.id}`, how: `Set the transformer quantity to ${unitCount(dpr.capacity)}, or correct the DPR capacity in DPR Initialization.` });
   }
 
   // 2. Facts written for section 01.
-  const written: [string, string | undefined][] = [
-    ['Name of work', content.details.nameOfWork],
-    ['MVA added', content.details.mvaAdded],
+  const written: [string, string, string | undefined][] = [
+    ['Name of work', 'nameOfWork', content.details.nameOfWork],
+    ['MVA added', 'mvaAdded', content.details.mvaAdded],
   ];
-  for (const [label, text] of written) {
+  for (const [label, key, text] of written) {
     const r = text ? mvaRatings(text) : [];
     if (unit && r.length && !r.includes(unit) && !(total && r.includes(total))) {
-      out.push({ id: `text-mva:${label}`, severity: 'blocker', step: 'text', message: `“${label}” mentions ${r.join(', ')} MVA, but the DPR is for ${dpr.capacity}.` });
+      out.push({ id: `text-mva:${label}`, severity: 'blocker', step: 'text', message: `“${label}” mentions ${r.join(', ')} MVA, but the DPR is for ${dpr.capacity}.`, target: `detail:${key}`, how: `Change the MVA rating in “${label}” to ${dpr.capacity}. If ${r.join(', ')} MVA is right, the DPR capacity is wrong: correct it in DPR Initialization.` });
     }
   }
 
   // 3. BCR inputs (none for pure line works, ADR-0007).
   const added = !isBcrExempt(e) && e.financials?.method !== 'manual' ? e.financials?.inputs?.addedMva ?? 0 : 0;
   if (total && added > total + 0.01) {
-    out.push({ id: 'bcr-mva', severity: 'blocker', step: 'finance', message: `The BCR assumes ${fmt(added)} MVA added, more than the DPR's ${dpr.capacity}.` });
+    out.push({ id: 'bcr-mva', severity: 'blocker', step: 'finance', message: `The BCR assumes ${fmt(added)} MVA added, more than the DPR's ${dpr.capacity}.`, target: 'bcr:addedMva', how: `Lower “Additional load after enhancement” to at most ${fmt(total)} MVA (the net MVA this work adds).` });
   }
   const load = loadFigures(e.load, dpr.capacity);
   if (load && added > 0 && Math.abs(load.addedMva - added) > 0.01) {
-    out.push({ id: 'bcr-load', severity: 'warning', step: 'finance', message: `The load data gives ${fmt(load.addedMva)} MVA added; the BCR uses ${fmt(added)} MVA.` });
+    out.push({ id: 'bcr-load', severity: 'warning', step: 'finance', message: `The load data gives ${fmt(load.addedMva)} MVA added; the BCR uses ${fmt(added)} MVA.`, target: 'bcr:addedMva', how: `Set “Additional load after enhancement” to ${fmt(load.addedMva)} MVA (the Load data card has a button for it), or correct the load data if that figure is wrong.` });
   }
   if (load && load.after > 1) {
-    out.push({ id: 'load-after', severity: 'warning', step: 'finance', message: `Even after the work the loading factor is ${load.after.toFixed(2)}: the added capacity does not cover the recorded peak.` });
+    out.push({ id: 'load-after', severity: 'warning', step: 'finance', message: `Even after the work the loading factor is ${load.after.toFixed(2)}: the added capacity does not cover the recorded peak.`, target: 'load', how: 'Check the peak load, power factor and capacities in Load data. If they are right, nothing needs changing, but the report text should not claim the overload is fully relieved.' });
   }
 
   // 4. Totals stated on the workbook's abstract sheets.
@@ -133,6 +137,8 @@ export function abstractChecks(e: Estimate, abstracts: StatedAbstract[]): CrossC
         severity: 'blocker',
         step: 'estimate',
         message: `${name} comes to ${fmt(ours)} lakh, but “${stated.sheet.trim()}” in the workbook states ${fmt(statedLakh)} lakh (difference ${fmt(ours - statedLakh)} lakh).`,
+        target: `abstract:${part}`,
+        how: `Usually an item was left out or a rate changed at import. Upload the BOQ workbook again and import it with “Replace”, then compare. If the workbook’s own sheet is wrong (e.g. a formula skips rows), press “It is correct…” on the Generate DPR step and note why.`,
       });
     }
   }
@@ -173,6 +179,8 @@ export function estimateChecks(e: Estimate): CrossCheck[] {
       id: 'dup-rows',
       severity: 'blocker',
       step: 'estimate',
+      target: `line:${doubled[0]![1]!.id}`,
+      how: 'Delete the highlighted copy (bin icon at the end of the row) and any other repeated rows, or upload the BOQ again and import it with “Replace”.',
       message: `${doubled.length} BOQ ${doubled.length === 1 ? 'row is' : 'rows are'} in the estimate more than once (e.g. ${first.code || first.description.slice(0, 40)}, from ${first.source}). Remove the copies, or import the BOQ again with “Replace”.`,
     });
   }
@@ -181,23 +189,25 @@ export function estimateChecks(e: Estimate): CrossCheck[] {
   for (const key of Object.keys(MISC_LABEL) as TotalKey[]) {
     const misc = e.misc[key] ?? 0;
     if (misc < 0) {
-      out.push({ id: `misc-neg:${key}`, severity: 'blocker', step: 'estimate', message: `${MISC_LABEL[key]}: “Miscellaneous” is negative (Rs ${fmt(misc)}), which takes Rs ${fmt(-misc)} off the items.` });
+      out.push({ id: `misc-neg:${key}`, severity: 'blocker', step: 'estimate', message: `${MISC_LABEL[key]}: “Miscellaneous” is negative (Rs ${fmt(misc)}), which takes Rs ${fmt(-misc)} off the items.`, target: `misc:${key}`, how: 'Set this “Miscellaneous” amount to 0 or to the small positive round-off from the workbook. A negative amount usually means items were dropped at import.' });
     } else if (misc > 0 && subTotal[key] > 0 && misc > subTotal[key] * 0.05) {
       out.push({
         id: `misc-big:${key}`,
         severity: 'warning',
         step: 'estimate',
         message: `${MISC_LABEL[key]}: “Miscellaneous” is Rs ${fmt(misc)}, ${fmt((misc / subTotal[key]) * 100)}% of the items (Rs ${fmt(subTotal[key])}). It is usually a small round-off to Rs ${fmt(total[key])}.`,
+        target: `misc:${key}`,
+        how: 'Check this amount against the workbook. If items were left out at import, import the BOQ again with “Replace”; otherwise lower it to the round-off.',
       });
     } else if (misc > 0 && subTotal[key] === 0) {
-      out.push({ id: `misc-alone:${key}`, severity: 'warning', step: 'estimate', message: `${MISC_LABEL[key]}: “Miscellaneous” Rs ${fmt(misc)} is set, but there are no items in that part.` });
+      out.push({ id: `misc-alone:${key}`, severity: 'warning', step: 'estimate', message: `${MISC_LABEL[key]}: “Miscellaneous” Rs ${fmt(misc)} is set, but there are no items in that part.`, target: `misc:${key}`, how: 'Set it to 0, or add the items this amount belongs to.' });
     }
   }
 
   const fractional = e.lines.filter((l) => /^(no|nos|no's|set|sets|each)\.?$/i.test(l.unit.trim()) && Math.abs(l.qty - Math.round(l.qty)) > 1e-9);
   if (fractional.length) {
     const l = fractional[0]!;
-    out.push({ id: 'qty-fraction', severity: 'warning', step: 'estimate', message: `${fractional.length} ${fractional.length === 1 ? 'item is' : 'items are'} counted in ${l.unit} but ${fractional.length === 1 ? 'has' : 'have'} a part quantity (e.g. ${l.code || l.description.slice(0, 40)}: ${l.qty}).` });
+    out.push({ id: 'qty-fraction', severity: 'warning', step: 'estimate', target: `line:${l.id}`, how: `Make the quantity a whole number, or change the unit if it is really measured in km, MT or metres.`, message: `${fractional.length} ${fractional.length === 1 ? 'item is' : 'items are'} counted in ${l.unit} but ${fractional.length === 1 ? 'has' : 'have'} a part quantity (e.g. ${l.code || l.description.slice(0, 40)}: ${l.qty}).` });
   }
 
   // The same item (same part, heading, wording and unit) at two supply rates. None of 21 KPTCL estimate
@@ -218,6 +228,8 @@ export function estimateChecks(e: Estimate): CrossCheck[] {
       severity: 'warning',
       step: 'estimate',
       message: `“${l.description.slice(0, 60)}” (${l.unit}) appears ${ls.length} times at different supply rates: ${rates.map((r) => `Rs ${fmt(r)}`).join(', ')}.`,
+      target: `line:${ls.find((x) => x.supplyRate !== l.supplyRate)!.id}`,
+      how: 'Give every copy of this item the same supply rate (the right one from the schedule of rates), or reword one if they really are different items.',
     });
   }
   return out;

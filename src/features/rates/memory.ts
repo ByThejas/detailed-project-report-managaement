@@ -1,6 +1,6 @@
 import type { EstimateLine } from '@/features/preparation/types';
 import { readJson, writeJson } from '@/lib/storage';
-import { itemText, suggestionFor, tokens, unitBasis, type RateIndex, type RateSuggestion } from './match';
+import { allItems, itemText, suggestionFor, tokens, unitBasis, type RateIndex, type RateSuggestion } from './match';
 import type { CatalogItem } from './types';
 
 /**
@@ -44,7 +44,7 @@ export function recalledChoices(index: RateIndex, lines: (Line & Pick<EstimateLi
   const store = readJson<Record<string, Remembered>>(STORE_KEY, {});
   if (!Object.keys(store).length) return out;
   let items = byId.get(index);
-  if (!items) byId.set(index, (items = new Map(index.items.map((i) => [i.id, i]))));
+  if (!items) byId.set(index, (items = new Map(allItems(index).map((i) => [i.id, i]))));
   for (const line of lines) {
     const r = store[choiceKey(line)];
     const item = r && items.get(r.itemId);

@@ -1,12 +1,16 @@
 import type { Cell, SheetGrid } from '@/features/boq-import/types';
 import { workbookToGrids } from '@/features/boq-import/readWorkbook';
-import type { CatalogItem, RateCatalog } from './types';
+import type { CatalogBook, CatalogItem, RateCatalog } from './types';
 
 /*
  * Reads and writes the rate catalog workbook, the same way scripts/generate-rates.mjs builds the
  * built-in one. Each sheet has columns Code | Kind | Item | Unit | Rate | SR ref | Remarks. A coded
  * Supply row is followed by its uncoded Labour and T&C rows. Rows without a kind are chapter headings
  * ("… (12 items)") or a shared description for the items below them; both are kept as context.
+ *
+ * A schedule of rates in another layout (a civil SR such as the KPWD one: Item No | Description | Unit |
+ * Rate) is read by its header row instead: every row with a description and a rate is an item, and rows
+ * with a description but no rate are headings kept as context for the items below them.
  */
 
 const clean = (v: Cell | undefined) => String(v ?? '').replace(/\s+/g, ' ').trim();
@@ -20,9 +24,85 @@ export const HEADERS = ['Code', 'Kind', 'Item / Activity', 'Unit', 'Rate', 'SR r
 /** The version in a catalog file name: "rate_catalog 76.xlsx" → 76. */
 export const versionOf = (fileName: string) => Number(/(\d+)\.xls[xm]?$/i.exec(fileName)?.[1] ?? 0) || null;
 
-export function parseCatalogGrids(grids: SheetGrid[], fileName: string): RateCatalog {
+interface Columns {
+  header: number;
+  code: number;
+  text: number;
+  unit: number;
+  rate: number;
+  sr: number;
+}
+
+const HEAD = {
+  code: /^(code|item\s*code|code\s*no\.?|item\s*no\.?|items?\s*no\.?|sl\.?\s*no\.?|s\.?\s*no\.?|sr\.?\s*no\.?|no\.?|sor\s*no\.?|sr\s*code|sor\s*code)$/i,
+  text: /(description|particulars|item|activity|work|specification)/i,
+  unit: /^(unit|units|uom|per)\b/i,
+  rate: /(rate|amount|cost|\brs\b)/i,
+  sr: /(sr\s*ref|ref\.?|reference|page|clause|remarks?)/i,
+};
+
+/** The columns of a sheet in another layout, from its header row (within the first 15 rows); null when it has none. */
+export function findColumns(rows: Cell[][]): Columns | null {
+  for (let r = 0; r < Math.min(rows.length, 15); r++) {
+    const cells = (rows[r] ?? []).map((c) => clean(c));
+    const at = (re: RegExp, not: number[] = []) => cells.findIndex((c, k) => c.length > 0 && c.length < 40 && re.test(c) && !not.includes(k));
+    const code = at(HEAD.code);
+    const unit = at(HEAD.unit);
+    const text = at(HEAD.text, [code, unit]);
+    const rate = at(HEAD.rate, [code, text, unit]);
+    if (text < 0 || rate < 0) continue;
+    return { header: r, code, text, unit, rate, sr: at(HEAD.sr, [code, text, unit, rate]) };
+  }
+  return null;
+}
+
+/** True when a sheet is in the catalog's own layout (Code | Kind | Item / Activity | …). */
+const ownLayout = (rows: Cell[][]) => clean(rows[0]?.[0]).toLowerCase() === 'code' && clean(rows[0]?.[1]).toLowerCase() === 'kind';
+
+function readOtherLayout(ws: SheetGrid, cols: Columns, book: CatalogBook | undefined, items: CatalogItem[]) {
+  const cell = (row: Cell[], k: number) => (k < 0 ? '' : clean(row[k]));
+  let chapter = '';
+  let context = '';
+  ws.rows.forEach((row, r) => {
+    if (r <= cols.header) return;
+    const text = cell(row, cols.text);
+    const code = cell(row, cols.code);
+    const rate = cols.rate < 0 ? null : num(row[cols.rate]);
+    if (!text) return;
+    if (rate === null || rate <= 0) {
+      // A heading: with a code it starts a chapter, without one it describes the items below it.
+      if (code) {
+        chapter = text;
+        context = '';
+      } else context = text;
+      return;
+    }
+    const n = r + 1;
+    items.push({
+      id: `${book === 'civil' ? 'civil:' : ''}${ws.name}#${n}`,
+      sheet: ws.name,
+      code,
+      kind: 'Item',
+      item: text,
+      context: [chapter, context].filter(Boolean).join(' · '),
+      unit: cell(row, cols.unit),
+      rate,
+      sr: cell(row, cols.sr),
+      labour: [],
+      tc: [],
+      ...(book === 'civil' ? { book } : {}),
+    });
+  });
+}
+
+export function parseCatalogGrids(grids: SheetGrid[], fileName: string, book?: CatalogBook): RateCatalog {
   const items: CatalogItem[] = [];
   for (const ws of grids) {
+    if (!ownLayout(ws.rows)) {
+      const cols = findColumns(ws.rows);
+      if (cols) readOtherLayout(ws, cols, book, items);
+      continue;
+    }
     let chapter = '';
     let context = '';
     let current: CatalogItem | null = null;
@@ -46,8 +126,9 @@ export function parseCatalogGrids(grids: SheetGrid[], fileName: string): RateCat
         current = null;
         return;
       }
-      if (kind === 'Supply' || (code && code !== '—')) {
-        current = { id: `${ws.name}#${n}`, sheet: ws.name, code, kind, item: text, context: [chapter, context].filter(Boolean).join(' · '), unit, rate, sr, labour: [], tc: [] };
+      // Supply rows (or a civil "Item"), and any row with a code, are items; Labour and T&C rows are their rates.
+      if (kind === 'Supply' || (code && code !== '—') || (kind !== 'Labour' && kind !== 'T&C')) {
+        current = { id: `${book === 'civil' ? 'civil:' : ''}${ws.name}#${n}`, sheet: ws.name, code, kind, item: text, context: [chapter, context].filter(Boolean).join(' · '), unit, rate, sr, labour: [], tc: [], ...(book === 'civil' ? { book } : {}) };
         items.push(current);
         return;
       }
@@ -59,16 +140,18 @@ export function parseCatalogGrids(grids: SheetGrid[], fileName: string): RateCat
 }
 
 /** Reads an uploaded catalog workbook (.xlsx or old .xls). Throws a message for the user when it has no rates. */
-export async function readCatalogFile(buffer: ArrayBuffer, fileName: string): Promise<RateCatalog> {
+export async function readCatalogFile(buffer: ArrayBuffer, fileName: string, book?: CatalogBook): Promise<RateCatalog> {
   let grids: SheetGrid[];
   try {
     grids = await workbookToGrids(buffer);
   } catch {
     throw new Error(`${fileName} could not be read as an Excel workbook.`);
   }
-  const catalog = parseCatalogGrids(grids, fileName);
+  const catalog = parseCatalogGrids(grids, fileName, book);
   if (!catalog.items.some((i) => i.rate !== null && i.rate > 0))
-    throw new Error(`No rates found in ${fileName}. Each sheet needs the columns ${HEADERS.slice(0, 6).join(' | ')} with a header in row 1, as in the downloaded catalog.`);
+    throw new Error(
+      `No rates found in ${fileName}. Each sheet needs a header row with at least a description and a rate column (for example Item No | Description | Unit | Rate), or the columns ${HEADERS.slice(0, 6).join(' | ')} as in the downloaded catalog.`,
+    );
   return catalog;
 }
 

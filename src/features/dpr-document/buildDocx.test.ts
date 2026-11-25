@@ -76,9 +76,11 @@ describe('DPR Word document', () => {
     expect(contentGaps(content)).not.toContain('Line component');
     expect(contentGaps(content)).not.toContain('e. Schedule of implementation');
     const checklist = dprChecklist(buildTemplate(dpr), EMPTY_DOCUMENTS, content);
-    expect(checklist).toContainEqual({ step: 'inputs', label: 'document: TCCM Proceedings' });
+    expect(checklist).toContainEqual(expect.objectContaining({ step: 'inputs', label: 'document: TCCM Proceedings', target: 'doc:tccm-proceedings' }));
     expect(checklist.map((g) => g.label)).not.toContain('document: TCCM Proposal');
-    expect(checklist).toContainEqual({ step: 'finance', label: 'BCR inputs (additional MVA)' });
+    expect(checklist).toContainEqual(expect.objectContaining({ step: 'finance', label: 'BCR inputs (additional MVA)', target: 'bcr:addedMva' }));
+    // Every gap says what to do.
+    expect(checklist.every((g) => g.how.length > 20)).toBe(true);
     expect(dprGaps(buildTemplate(dpr), EMPTY_DOCUMENTS, content)).toContain('text: Existing capacity');
   });
 

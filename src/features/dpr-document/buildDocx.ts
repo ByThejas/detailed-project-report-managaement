@@ -133,19 +133,33 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
       rows.map((r, i) => [String(i + 1), r.label, inr(r.lakhs)]),
       { numeric: [2], widths: [10, 70, 20], boldRows: rows.flatMap((r, i) => (r.emphasis ? [i] : [])) },
     );
+  /** Item rows with the uploaded estimate's heading rows ("A1 | CIRCUIT BREAKER …") above them, so the Sl. No. read as in the file. */
+  const itemRows = (lines: Estimate['lines'], width: number, row: (l: Estimate['lines'][number]) => string[]) => {
+    const rows: string[][] = [];
+    const heads: number[] = [];
+    for (const l of lines) {
+      for (const h of l.headings ?? []) {
+        heads.push(rows.length);
+        rows.push([h.code, h.text, ...new Array<string>(width - 2).fill('')]);
+      }
+      rows.push(row(l));
+    }
+    return { rows, heads };
+  };
   const singleRateTable = (section: EstimateSection, miscLabel: string) => {
     const { subTotal, total } = sectionTotals(e);
     const key = SECTION_KEYS[section].supply;
     const lines = e.lines.filter((l) => l.section === section);
+    const { rows: body, heads } = itemRows(lines, 6, (l) => [l.code, l.description, l.unit, qty(l.qty), inr(l.supplyRate), inr(lineAmounts(l).supply)]);
     return table(
       ['Sl. No.', 'Particulars', 'Unit', 'Qty', 'Rate (Rs)', 'Amount (Rs)'],
       [
-        ...lines.map((l) => [l.code, l.description, l.unit, qty(l.qty), inr(l.supplyRate), inr(lineAmounts(l).supply)]),
+        ...body,
         ['', 'Sub total', '', '', '', inr(subTotal[key])],
         ['', miscLabel, '', '', '', inr(e.misc[key] ?? 0)],
         ['', 'Total amount', '', '', '', inr(total[key])],
       ],
-      { numeric: [3, 4, 5], widths: [8, 50, 8, 9, 12, 13], boldRows: [lines.length + 2] },
+      { numeric: [3, 4, 5], widths: [8, 50, 8, 9, 12, 13], boldRows: [...heads, body.length + 2] },
     );
   };
   const filesFor = (keys: readonly string[]) => keys.flatMap((k) => filesOf(documents, k).map((x) => x.name));
@@ -307,20 +321,22 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
   const electrical = e.lines.filter((l) => l.section === 'electrical');
   const lineLines = e.lines.filter((l) => l.section === 'line');
   const labour = (l: (typeof lineLines)[number]) => lineAmounts(l).erection + lineAmounts(l).testing;
+  const { rows: electricalRows, heads: electricalHeads } = itemRows(electrical, 10, (l) => {
+    const a = lineAmounts(l);
+    return [l.code, l.description, l.unit, qty(l.qty), inr(l.supplyRate), inr(a.supply), inr(l.erectionRate), inr(a.erection), inr(l.testingRate), inr(a.testing)];
+  });
+  const { rows: lineRows, heads: lineHeads } = itemRows(lineLines, 8, (l) => [l.code, l.description, l.unit, qty(l.qty), inr(l.supplyRate), inr(lineAmounts(l).supply), inr(l.erectionRate + l.testingRate), inr(labour(l))]);
   const landscapeEstimates = [
     minor('3. Estimates (contd.): Part A, supply, erection, testing and commissioning'),
     table(
       ['Sl. No.', 'Name of the equipment / materials', 'Unit', 'Qty', 'Supply rate', 'Supply amount', 'Erection rate', 'Erection amount', 'T&C rate', 'T&C amount'],
       [
-        ...electrical.map((l) => {
-          const a = lineAmounts(l);
-          return [l.code, l.description, l.unit, qty(l.qty), inr(l.supplyRate), inr(a.supply), inr(l.erectionRate), inr(a.erection), inr(l.testingRate), inr(a.testing)];
-        }),
+        ...electricalRows,
         ['', 'Sub total', '', '', '', inr(subTotal.supply), '', inr(subTotal.erection), '', inr(subTotal.testing)],
         ['', 'Miscellaneous and unforeseen', '', '', '', inr(e.misc.supply), '', inr(e.misc.erection), '', inr(e.misc.testing)],
         ['', 'Total', '', '', '', inr(total.supply), '', inr(total.erection), '', inr(total.testing)],
       ],
-      { numeric: [3, 4, 5, 6, 7, 8, 9], widths: [6, 30, 5, 5, 9, 11, 8, 10, 7, 9], boldRows: [electrical.length + 2], size: 17 },
+      { numeric: [3, 4, 5, 6, 7, 8, 9], widths: [6, 30, 5, 5, 9, 11, 8, 10, 7, 9], boldRows: [...electricalHeads, electricalRows.length + 2], size: 17 },
     ),
     ...(lineWorks
       ? [
@@ -328,12 +344,12 @@ export function createDprDocument(d: typeof Docx, input: DprDocInput): Docx.Docu
           table(
             ['Sl. No.', 'Description', 'Unit', 'Qty', 'Material rate', 'Material amount', 'Labour rate', 'Labour amount'],
             [
-              ...lineLines.map((l) => [l.code, l.description, l.unit, qty(l.qty), inr(l.supplyRate), inr(lineAmounts(l).supply), inr(l.erectionRate + l.testingRate), inr(labour(l))]),
+              ...lineRows,
               ['', 'Sub total', '', '', '', inr(subTotal.lineSupply), '', inr(subTotal.lineErection + subTotal.lineTesting)],
               ['', 'Miscellaneous', '', '', '', inr(e.misc.lineSupply ?? 0), '', inr((e.misc.lineErection ?? 0) + (e.misc.lineTesting ?? 0))],
               ['', 'Total', '', '', '', inr(total.lineSupply), '', inr(total.lineErection + total.lineTesting)],
             ],
-            { numeric: [3, 4, 5, 6, 7], widths: [7, 37, 8, 7, 10, 12, 9, 10], boldRows: [lineLines.length + 2], size: 17 },
+            { numeric: [3, 4, 5, 6, 7], widths: [7, 37, 8, 7, 10, 12, 9, 10], boldRows: [...lineHeads, lineRows.length + 2], size: 17 },
           ),
         ]
       : []),

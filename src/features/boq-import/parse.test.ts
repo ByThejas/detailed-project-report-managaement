@@ -1,5 +1,5 @@
 import ExcelJS from 'exceljs';
-import { columnLetter, openErrors, parseBoq, readNumber, roleOf, sectionOfContent, warningsOf } from './parse';
+import { columnLetter, itemAmount, openErrors, parseBoq, readNumber, roleOf, sectionOfContent, warningsOf } from './parse';
 import { readBoqWorkbook } from './readWorkbook';
 import type { Cell } from './types';
 
@@ -111,8 +111,10 @@ describe('parseBoq', () => {
     expect(cable).toMatchObject({ qty: 100, unit: 'Mtr' });
     expect(warningsOf(cable!).map((w) => w.message)).toEqual(['Quantity read from “100 Mtr” as 100']);
     expect(openErrors(earthing!).map((e) => e.message)).toEqual(['Quantity “LS” is not a number']);
-    expect(warningsOf(lamp!)[0]!.message).toBe('Supply amount in the file is 70,000, but qty × rate is 76,376. The file’s amount is used (rate 17,500)');
-    expect(lamp!.supplyRate).toBe(17_500);
+    expect(warningsOf(lamp!)[0]!.message).toBe('Supply amount in the file is 70,000, not qty × rate (76,376): the formula has a weight or distance in it. The file’s rate and amount are both kept');
+    // The rate stays as written in the file, and the amount is the file's own.
+    expect(lamp!.supplyRate).toBe(19_094);
+    expect(itemAmount(lamp!, 'supply')).toBe(70_000);
     expect(openErrors(plates!)[0]!.message).toBe('Quantity -2 is negative');
     expect(again!.supplyRate).toBe(0);
     expect(warningsOf(again!).map((w) => w.message)).toEqual(['Supply rate “quote” is not a number; left blank', 'Item number 4 also appears on row 5']);

@@ -2,7 +2,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import ExcelJS from 'exceljs';
 import { abstractOf, generalAbstract, sectionTotals } from '@/features/preparation/calc';
 import { buildTemplate } from '@/features/preparation/template';
-import { kindOfSheet, parseBoq, readAbstract, sectionOfSheet, warningsOf } from './parse';
+import { itemAmount, kindOfSheet, parseBoq, readAbstract, sectionOfSheet, warningsOf } from './parse';
 import { readBoqWorkbook } from './readWorkbook';
 import { applyImport, planImport } from './toEstimateLine';
 import type { BoqReadResult, Cell, SheetGrid } from './types';
@@ -115,19 +115,23 @@ describe('KPTCL estimate workbooks', () => {
 
     const towers = r.items.find((i) => i.description.startsWith('Station Towers'))!;
     expect(towers).toMatchObject({ qty: 3, unit: 'No (3.162 MT)', supplyRate: 165_475.62 });
-    expect(towers.erectionRate * 3).toBeCloseTo(18_096.13, 1);
+    // The file's rate stays as written (Rs 5,723 per MT) and its amount (3.162 MT × 5,723) is kept beside it.
+    expect(towers.erectionRate).toBe(5_723);
+    expect(itemAmount(towers, 'erection')).toBeCloseTo(18_096.13, 1);
     expect(warningsOf(towers).map((w) => w.message)).toEqual([
       'Quantity “3/3.162” read as 3 No weighing 3.162 MT',
-      'Erection rate 5,723 is per MT; taken as 6,032.04 per No (3.162 MT ÷ 3 No)',
+      'Erection rate 5,723 is per MT: the amount is 18,096.13 for 3.162 MT, as in the file',
     ]);
     const pole = r.items.find((i) => i.description.startsWith('Double pole'))!;
-    expect(pole.supplyRate).toBe(37_788.96);
+    // The file's rate (78,727) stays; the amount is the file's 37,788.96 (its formula takes 0.48 of the rate).
+    expect(pole.supplyRate).toBe(78_727);
+    expect(itemAmount(pole, 'supply')).toBe(37_788.96);
     const lumpSum = r.items.find((i) => i.code === 'A22')!;
     expect(lumpSum).toMatchObject({ qty: 1, supplyRate: 0, erectionRate: 22_228, testingRate: 0 });
 
     const tower = r.items.find((i) => i.sheet === 'Line Supply' && i.unit.startsWith('No'))!;
     expect(tower).toMatchObject({ qty: 1, unit: 'No (6.907289 MT)' });
-    expect(tower.supplyRate).toBeCloseTo(978_624.71, 1);
+    expect(itemAmount(tower, 'supply')).toBeCloseTo(978_624.71, 1);
     expect(r.items.find((i) => i.sheet === 'SS Civil')!.srRef).toBe('(V1/Pg7/1.8)');
 
     // Every stated total, including "Total" = sub-total + miscellaneous, matches.

@@ -1,5 +1,6 @@
 import type { EstimateLine, EstimateSection } from '@/features/preparation/types';
 import type { CatalogChildRate, CatalogItem, RateCatalog } from './types';
+import { effectiveRate } from '@/features/preparation/calc';
 
 /**
  * Suggests catalog items for a BOQ line by the words and numbers they share, weighted so that rare words
@@ -124,7 +125,17 @@ export interface RateIndex {
   norms: number[];
   /** Voltage classes each item is for (empty when it names none). */
   hv: Set<number>[];
+  /**
+   * The civil schedule of rates the user added, indexed on its own so its words never change how the
+   * electrical SoR matches. Civil BOQ parts are matched against both.
+   */
+  civil?: RateIndex;
 }
+
+const isCivilSection = (section: EstimateSection) => section === 'civil' || section === 'lineCivil';
+
+/** Every item of the index: the electrical SoR and the civil catalog. */
+export const allItems = (index: RateIndex): CatalogItem[] => (index.civil ? [...index.items, ...index.civil.items] : index.items);
 
 /** Rated equipment voltages name their system voltage: a 72.5 kV breaker is for a 66 kV system. */
 const EQUIPMENT_KV: Record<number, number> = { 12: 11, 36: 33, 72.5: 66, 123: 110, 145: 132, 245: 220, 420: 400 };
@@ -186,8 +197,16 @@ export function itemKv(item: Pick<CatalogItem, 'item' | 'context'>): Set<number>
   return kvClasses(`${item.item} ${item.context}`);
 }
 
-export function buildIndex(catalog: RateCatalog): RateIndex {
-  const items = catalog.items.filter((i) => i.rate !== null && i.rate > 0);
+/** The match index of the electrical SoR, with the civil catalog (when there is one) as its own index beside it. */
+export function buildIndex(catalog: RateCatalog, civil?: RateCatalog | null): RateIndex {
+  const own = indexOf(catalog.items.filter((i) => i.book !== 'civil'));
+  const civilItems = [...catalog.items.filter((i) => i.book === 'civil'), ...(civil?.items ?? []).map((i) => (i.book === 'civil' ? i : { ...i, book: 'civil' as const }))];
+  const sub = indexOf(civilItems);
+  return sub.items.length ? { ...own, civil: sub } : own;
+}
+
+function indexOf(all: CatalogItem[]): RateIndex {
+  const items = all.filter((i) => i.rate !== null && i.rate > 0);
   const toks = items.map((i) => {
     const t = new Set(tokens(`${i.item} ${i.context}`));
     if (isSteelItem(i)) t.add(STEEL);
@@ -419,6 +438,13 @@ export function jobContext(lines: Pick<EstimateLine, 'description'>[]): string[]
 }
 
 export function suggestRates(index: RateIndex, line: LineBasis & Pick<EstimateLine, 'description'> & { group?: string; job?: string[] }, max = 3): RateSuggestion[] {
+  const own = suggestFrom(index, line, max);
+  // Civil items are matched against the civil schedule of rates too, the best of both first.
+  if (!index.civil || !isCivilSection(line.section)) return own;
+  return [...suggestFrom(index.civil, line, max, true), ...own].sort((a, b) => b.score - a.score).slice(0, max);
+}
+
+function suggestFrom(index: RateIndex, line: LineBasis & Pick<EstimateLine, 'description'> & { group?: string; job?: string[] }, max: number, civilBook = false): RateSuggestion[] {
   const steelLine = isSteelStructureLine(line);
   // A structure "including bolts & nuts" is steel, not bolts. Only a heading such as "Supply of galvanised bolts, nuts
   // and washers", or the "(contd.)" row of a structure, is for the bolts and nuts themselves.
@@ -462,7 +488,7 @@ export function suggestRates(index: RateIndex, line: LineBasis & Pick<EstimateLi
   const allowed = SHEETS[line.section];
   const scored: { i: number; score: number; shared: number }[] = [];
   index.items.forEach((item, i) => {
-    if (!allowed(item.sheet)) return;
+    if (!civilBook && !allowed(item.sheet)) return;
     const s = index.toks[i]!;
     let dot = 0;
     let shared = 0;
@@ -581,12 +607,23 @@ export function applySuggestion(line: EstimateLine, s: RateSuggestion): { line: 
     if (now > 0) kept.push(kind);
     return now;
   };
+  const erectionRate = pick(s.erectionRate, line.erectionRate, 'erection');
+  const testingRate = pick(s.testingRate, line.testingRate, 'testing');
+  // A catalog rate is per the line's own unit, so an amount kept from the file (worked on a weight or distance) stops
+  // applying to every rate the catalog replaces. Rates kept as they were keep their file amount.
+  const pins = { ...line.fileAmounts };
+  delete pins.supply;
+  if (erectionRate !== line.erectionRate) delete pins.erection;
+  if (testingRate !== line.testingRate) delete pins.testing;
+  const { fileAmounts: _drop, ...rest } = line;
+  void _drop;
   return {
     line: {
-      ...line,
+      ...rest,
+      ...(Object.keys(pins).length ? { fileAmounts: pins } : {}),
       supplyRate: s.supplyRate,
-      erectionRate: pick(s.erectionRate, line.erectionRate, 'erection'),
-      testingRate: pick(s.testingRate, line.testingRate, 'testing'),
+      erectionRate,
+      testingRate,
       rateRef: rateRefOf(s),
       labourNotAdded: multi && s.notApplied.length ? s.notApplied.map((n) => `Rs ${formatRate(n.rate)} per ${n.unit}`).join(', ') : undefined,
     },
@@ -644,7 +681,7 @@ export function isReliable(line: Pick<EstimateLine, 'description'> & { group?: s
 }
 
 /** Where a rate came from, shown under the BOQ line. */
-export const rateRefOf = (s: RateSuggestion) => `SoR 2023-24 · ${s.item.sheet} ${s.item.code}${s.item.sr ? ` · ${s.item.sr}` : ''}`;
+export const rateRefOf = (s: RateSuggestion) => `${s.item.book === 'civil' ? 'Civil SR' : 'SoR 2023-24'} · ${s.item.sheet} ${s.item.code}${s.item.sr ? ` · ${s.item.sr}` : ''}`;
 
 const CIVIL_SHEET = /civil/i;
 
@@ -656,7 +693,15 @@ const CIVIL_SHEET = /civil/i;
 export function exactCodeMatch(index: RateIndex, line: LineBasis & Pick<EstimateLine, 'srCode'>): RateSuggestion | null {
   const code = line.srCode?.trim().replace(/^(sr|sor)\s*/i, '');
   if (!code) return null;
-  const civil = line.section === 'civil' || line.section === 'lineCivil';
+  const civil = isCivilSection(line.section);
+  // A civil item's code is first looked up in the civil schedule of rates, when the user added one.
+  if (civil && index.civil) {
+    const own = index.civil.items.filter((i) => i.code === code && i.rate !== null);
+    const units = new Set(own.map((i) => i.unit));
+    // The same code in several sheets is only sure when they all agree on the rate and unit.
+    const item = own.length && units.size === 1 && new Set(own.map((i) => i.rate)).size === 1 ? own[0] : undefined;
+    if (item && unitFactor(line.unit || item.unit, item.unit) !== null) return { ...suggestionFor(item, line, 1), exact: true };
+  }
   const found = index.items.filter((i) => i.code === code && i.rate !== null && SHEETS[line.section](i.sheet) && (!civil || CIVIL_SHEET.test(i.sheet)));
   const item = found.find((i) => i.sheet === 'By code') ?? (found.length === 1 ? found[0] : undefined);
   if (!item) return null;
@@ -678,9 +723,10 @@ export interface OddRate {
 
 /** The catalog item a line's rate was taken from, read back from its rateRef ("SoR 2023-24 · By code 1.13 · p25"). */
 export function itemOfRateRef(index: RateIndex, rateRef: string | undefined): CatalogItem | null {
-  const m = /^SoR [^·]*·\s*(.+?)\s+(\S+?)(?:\s+·|$)/.exec(rateRef ?? '');
+  const m = /^(SoR|Civil SR)\b[^·]*·\s*(.+?)\s+(\S+?)(?:\s+·|$)/.exec(rateRef ?? '');
   if (!m) return null;
-  return index.items.find((i) => i.sheet === m[1] && i.code === m[2]) ?? null;
+  const items = m[1] === 'Civil SR' ? (index.civil?.items ?? []) : index.items;
+  return items.find((i) => i.sheet === m[2] && i.code === m[3]) ?? null;
 }
 
 /** How far a rate may sit from its SoR item before it is shown: 1.5× either way. */
@@ -700,7 +746,7 @@ export function oddRates(index: RateIndex, lines: EstimateLine[]): OddRate[] {
     const diffs = priced ? ratingDifferences(line, priced) : [];
     if (priced && diffs.length) {
       const s = suggestionFor(priced, line);
-      out.push({ line, match: s, ratio: s.supplyRate ? line.supplyRate / s.supplyRate : 1, why: `was priced from SoR ${priced.code}, which is ${diffs.join(' and ')}` });
+      out.push({ line, match: s, ratio: s.supplyRate ? effectiveRate(line, 'supply') / s.supplyRate : 1, why: `was priced from SoR ${priced.code}, which is ${diffs.join(' and ')}` });
       continue;
     }
     let match = exactCodeMatch(index, line);
@@ -709,7 +755,7 @@ export function oddRates(index: RateIndex, lines: EstimateLine[]): OddRate[] {
       match = top && isReliable(line, top) ? top : null;
     }
     if (!match || !(match.supplyRate > 0) || !match.unitMatches) continue;
-    const ratio = line.supplyRate / match.supplyRate;
+    const ratio = effectiveRate(line, 'supply') / match.supplyRate;
     if (ratio <= ODD_RATE_FACTOR && ratio >= 1 / ODD_RATE_FACTOR) continue;
     const near = (x: number, target: number) => Math.abs(x / target - 1) < 0.2;
     const why =
@@ -777,7 +823,7 @@ export function sorDifferences(index: RateIndex, lines: EstimateLine[]): SorDiff
   for (const line of lines) {
     if (!(line.supplyRate > 0)) continue;
     const match = certainMatch(index, line);
-    if (match && match.supplyRate > 0 && differsFromRate(match.supplyRate, line.supplyRate)) out.push({ line, match });
+    if (match && match.supplyRate > 0 && differsFromRate(match.supplyRate, effectiveRate(line, 'supply'))) out.push({ line, match });
   }
   return out;
 }

@@ -158,7 +158,7 @@ describe('BOQ import', () => {
     await waitFor(() => expect(sampleStore.estimate(DPR.id)!.lines.filter((l) => l.section === 'electrical').map((l) => l.qty)).toEqual([2, 100]));
   });
 
-  it('shows the SoR rate beside a file rate that differs, and imports at the SoR rate', async () => {
+  it('shows the SoR rate beside a file rate that differs, and still imports the file rate', async () => {
     const wb = new ExcelJS.Workbook();
     const ws = wb.addWorksheet('Electrical');
     ws.addRow(['Sl No', 'Description', 'Unit', 'Qty', 'Supply rate', 'Supply amount']);
@@ -173,8 +173,10 @@ describe('BOQ import', () => {
     const diff = await within(review).findByRole('status', { name: 'Rates that differ from the SoR' }, { timeout: 10000 });
     expect(diff).toHaveTextContent('file Rs 2,18,37,000, SoR 1.11 Rs 2,07,15,000');
     expect(within(review).getByText('SoR 1.11: 2,07,15,000')).toBeInTheDocument();
+    expect(diff).toHaveTextContent('The file’s rates are imported as they are');
     await userEvent.click(within(review).getByRole('button', { name: /^Import 1 items/ }));
-    await waitFor(() => expect(sampleStore.estimate(DPR.id)!.lines.find((l) => l.section === 'electrical')!.supplyRate).toBe(20_715_000));
+    // The uploaded estimate's rate is the truth: it is never re-priced from the rate catalog.
+    await waitFor(() => expect(sampleStore.estimate(DPR.id)!.lines.find((l) => l.section === 'electrical')!.supplyRate).toBe(21_837_000));
   }, 20000);
 
   it('imports a row with no rate in the file at the SoR rate', async () => {

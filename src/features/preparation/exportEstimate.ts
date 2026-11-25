@@ -1,6 +1,6 @@
 import type { Workbook, Worksheet, CellValue } from 'exceljs';
 import type { DprRow } from '@/features/reports/types';
-import { abstractValues, generalAbstract, hasLineWorks, lineAmounts, sectionTotals, SECTION_KEYS, type AbstractPart, type TotalKey } from './calc';
+import { abstractValues, amountFactor, generalAbstract, hasLineWorks, lineAmounts, sectionTotals, SECTION_KEYS, type AbstractPart, type TotalKey } from './calc';
 import { ANALYSIS_YEARS, DEFAULT_BCR_INPUTS, DEFAULT_FINANCIALS, isBcrExempt, kptclAppraisal, summariseFinancials } from './finance';
 import type { BcrInputs } from './finance';
 import type { Estimate, EstimateSection } from './types';
@@ -83,13 +83,27 @@ function itemSheet(wb: Workbook, e: Estimate, spec: ItemSheetSpec, notes: string
   // Items with no quantity are left out of the download.
   const lines = e.lines.filter((l) => l.section === spec.section && (l.qty || 0) !== 0);
   for (const l of lines) {
+    // The heading rows the uploaded estimate prints above the item ("A1 | CIRCUIT BREAKER …"), with its Sl. No.
+    for (const h of l.headings ?? []) {
+      const hr = ws.addRow([h.code || null, h.text || null]);
+      hr.font = { bold: true };
+      hr.alignment = { vertical: 'top', wrapText: true };
+    }
     const a = lineAmounts(l);
     const row = ws.addRow([l.code, l.description, l.unit, l.qty]);
     const r = row.number;
     spec.cols.forEach((c, i) => {
       const rc = 5 + i * 2;
       row.getCell(rc).value = l[c.rateOf] || null;
-      row.getCell(rc + 1).value = f(`ROUND($D${r}*${col(rc)}${r},2)`, a[c.amountOf]);
+      // An amount kept from the uploaded estimate that is not qty × rate (a weight or distance in its formula) keeps the
+      // file's multiplier, so the download shows the same amount and still follows a changed quantity or rate.
+      const k = amountFactor(l, c.amountOf);
+      const pinned = l.fileAmounts?.[c.amountOf] && Math.abs(a[c.amountOf] - Math.round(l.qty * l[c.rateOf] * 100) / 100) > 0.004;
+      row.getCell(rc + 1).value = pinned
+        ? k !== null
+          ? f(`ROUND($D${r}*${col(rc)}${r}*${k},2)`, a[c.amountOf])
+          : a[c.amountOf]
+        : f(`ROUND($D${r}*${col(rc)}${r},2)`, a[c.amountOf]);
       row.getCell(rc).fill = INPUT_FILL;
       row.getCell(rc).numFmt = RS;
       row.getCell(rc + 1).numFmt = RS;

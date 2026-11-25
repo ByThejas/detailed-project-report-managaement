@@ -116,7 +116,7 @@ function KptclBcrCard({ e, f, onChange, capacity }: { e: Estimate; f: Financials
       </dl>
       <div className="grid gap-x-6 gap-y-3 px-4 py-3 text-[13px] sm:grid-cols-2 lg:grid-cols-5">
         {INPUT_FIELDS.map((x) => (
-          <label key={x.key} className="row-span-3 grid grid-rows-subgrid gap-y-1">
+          <label key={x.key} data-fix={`bcr:${x.key}`} className="row-span-3 grid grid-rows-subgrid gap-y-1">
             <span className="label-muted self-end">
               {x.label}
               {x.unit && <span className="text-gray-400"> ({x.unit})</span>}
@@ -293,7 +293,7 @@ function ManualBenefitsCard({ e, onChange }: { e: Estimate; onChange: (e: Estima
           Discount rate %
           <NumberInput label="Discount rate %" value={f.discountRatePct} onChange={(n) => set({ discountRatePct: n })} boxed className="w-16" />
         </label>
-        <div>
+        <div data-fix="bcr:benefits">
           <p className="label-muted mb-1.5">Benefit by year, Rs lakh</p>
           <div className="grid grid-cols-3 gap-x-3 gap-y-1.5 sm:grid-cols-5 lg:grid-cols-10">
             {benefits.map((b, i) => (

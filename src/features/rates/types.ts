@@ -6,6 +6,9 @@ export interface CatalogChildRate {
   sr: string;
 }
 
+/** Which catalog an item belongs to: the electrical SoR (rate_catalog) or the civil schedule of rates the user adds. */
+export type CatalogBook = 'electrical' | 'civil';
+
 /** One priced item of the KPTCL rate catalog (Common SoR 2023-24), from src/data/rateCatalog.json. */
 export interface CatalogItem {
   id: string;
@@ -21,6 +24,8 @@ export interface CatalogItem {
   sr: string;
   labour: CatalogChildRate[];
   tc: CatalogChildRate[];
+  /** 'civil' for an item of the civil catalog; absent for the electrical SoR. */
+  book?: 'civil';
 }
 
 export interface RateCatalog {

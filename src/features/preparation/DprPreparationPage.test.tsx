@@ -30,7 +30,8 @@ describe('DPR Preparation', () => {
     const inputs = await screen.findByRole('region', { name: 'Input documents' });
     expect(within(inputs).getAllByRole('listitem')).toHaveLength(9);
     expect(within(inputs).getByText('TCCM Proposal')).toBeInTheDocument();
-    expect(within(inputs).getAllByText('Missing')).toHaveLength(9);
+    expect(within(inputs).getAllByText('Missing')).toHaveLength(7);
+    expect(within(inputs).getAllByText('Optional')).toHaveLength(2);
     expect(screen.getByText('In preparation')).toBeInTheDocument();
     expect(screen.queryByText(/This estimate was built for/)).not.toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'Estimate summary' })).getByText('0 / 9')).toBeInTheDocument();
@@ -142,7 +143,7 @@ describe('DPR Preparation', () => {
     renderAt(url);
     await userEvent.click(await screen.findByRole('button', { name: 'Generate full DPR' }));
     const panel = screen.getByRole('region', { name: 'Generate full DPR' });
-    expect(within(panel).getByRole('button', { name: 'Generate draft DPR (Word)' })).toBeInTheDocument();
+    expect(within(panel).getByRole('button', { name: 'Open DPR to print' })).toBeInTheDocument();
     const missing = screen.getByRole('region', { name: 'Still missing' });
     expect(within(missing).getByText('TCCM Proceedings')).toBeInTheDocument();
     expect(within(missing).queryByText('TCCM Proposal')).not.toBeInTheDocument();
@@ -156,6 +157,52 @@ describe('DPR Preparation', () => {
     await userEvent.type(screen.getByRole('textbox', { name: 'Existing capacity' }), '2x8 MVA, 66/11 kV');
     await openStep('Generate DPR');
     expect(within(screen.getByRole('region', { name: 'Still missing' })).queryByText('Existing capacity')).not.toBeInTheDocument();
+  });
+
+  it('Fix lands on the exact field, says what to do, and turns green once it is done', async () => {
+    seed([KOGALI]);
+    renderAt(url);
+    await userEvent.click(await screen.findByRole('button', { name: 'Generate full DPR' }));
+    await userEvent.click(within(screen.getByRole('region', { name: 'Still missing' })).getByRole('button', { name: 'Fix Existing capacity' }));
+    const bar = await screen.findByRole('region', { name: 'What to fix' });
+    expect(bar).toHaveTextContent('To fix: Existing capacity');
+    expect(bar).toHaveTextContent('What to do: Type “Existing capacity” in the 01 Project at a glance box, or press Generate');
+    const field = screen.getByRole('textbox', { name: 'Existing capacity' });
+    await vi.waitFor(() => expect(field).toHaveFocus());
+    expect(field.closest('[data-fix]')).toHaveClass('fix-target');
+    await userEvent.type(field, '2x8 MVA, 66/11 kV');
+    expect(screen.getByRole('region', { name: 'What to fix' })).toHaveTextContent('Fixed: Existing capacity');
+    await userEvent.click(within(screen.getByRole('region', { name: 'What to fix' })).getByRole('button', { name: /Next problem/ }));
+    expect(screen.getByRole('region', { name: 'What to fix' })).toHaveTextContent('To fix:');
+  });
+
+  it('uploads a missing input document from the Inputs step', async () => {
+    seed([KOGALI]);
+    renderAt(url);
+    await userEvent.click(await screen.findByRole('button', { name: 'Generate full DPR' }));
+    await userEvent.click(within(screen.getByRole('region', { name: 'Still missing' })).getByRole('button', { name: 'Fix TCCM Proceedings' }));
+    expect(await screen.findByRole('region', { name: 'What to fix' })).toHaveTextContent('Press “Upload” on the TCCM Proceedings row');
+    await userEvent.click(screen.getByRole('button', { name: 'Upload TCCM Proceedings' }));
+    await userEvent.upload(screen.getByTestId('inputs-file-input'), new File(['x'], 'tccm.pdf', { type: 'application/pdf' }));
+    expect(await screen.findByRole('button', { name: 'Preview tccm.pdf' })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: 'What to fix' })).toHaveTextContent('Fixed: TCCM Proceedings');
+  });
+
+  it('drafts a Report text field from the uploaded documents with its Generate button', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('{}', { status: 501 })));
+    seed([KOGALI]);
+    sampleStore.saveDocuments(KOGALI.id, { files: { 'tccm-proceedings': [{ name: 'tccm.txt', size: 10, addedAt: '2026-11-24T09:00:00.000Z' }] }, notApplicable: [] });
+    await putFiles(KOGALI.id, 'tccm-proceedings', [new File(['Proceedings of the 6th TCCM of BESCOM held on 24.09.2026, Subject No. 63.'], 'tccm.txt', { type: 'text/plain' })]);
+    renderAt(url);
+    await openStep('Report text');
+    await userEvent.click(screen.getByRole('button', { name: 'Generate Approval' }));
+    const draft = await screen.findByRole('region', { name: 'Draft for Approval' });
+    expect(within(draft).getByRole('textbox', { name: 'Drafted Approval' })).toHaveValue('6th TCCM of BESCOM held on 24.09.2026, Subject-63.');
+    expect(within(draft).getByText(/tccm\.txt/)).toBeInTheDocument();
+    await userEvent.click(within(draft).getByRole('button', { name: 'Use this text' }));
+    expect(screen.getByRole('textbox', { name: 'Approval' })).toHaveValue('6th TCCM of BESCOM held on 24.09.2026, Subject-63.');
+    expect(screen.queryByRole('region', { name: 'Draft for Approval' })).not.toBeInTheDocument();
+    vi.unstubAllGlobals();
   });
 
   it('edits the PERT stages and flags a chart that overruns the completion period', async () => {
