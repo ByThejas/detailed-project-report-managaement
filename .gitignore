@@ -11,3 +11,5 @@ fixtures/private/
 
 # Scratch archives Claude uses to copy files in and out (not source)
 .claude-tmp/
+*.zip
+.env.local
