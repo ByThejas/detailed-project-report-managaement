@@ -2,14 +2,13 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { ChevronDown, ChevronUp, Download, FileSpreadsheet, Minus, Plus, RotateCcw, X } from 'lucide-react';
 import { usePersistentState } from '@/hooks/usePersistentState';
 import { useToast } from '@/lib/toast';
-import { buildEstimateWorkbook } from '@/features/preparation/exportEstimate';
 import type { Estimate } from '@/features/preparation/types';
 import type { DprRow } from '@/features/reports/types';
 import { DEFAULT_PDF_SETTINGS, PAPER, SHEET_TITLES, defaultOrientation, heading, projectLine, withDefaults, type BorderStyle, type Orientation, type PageStyle, type Paper, type PdfSettings, type SheetSettings } from './format';
 import { approxMeasure, columnWidths, layout, orderSheets, pageKey, pageSettings, sheetSettings, type Measure, type Page } from './layout';
 import { FONT_FILES, PREVIEW_FONT, downloadPdf, loadFonts } from './renderPdf';
-import { sheetsFromFile, sheetsFromWorkbook, type PdfSheet } from './sheets';
-import { settingsKey } from './estimatePdfBytes';
+import { sheetsFromFile, type PdfSheet } from './sheets';
+import { estimateSheets, orderFor, settingsKey } from './estimatePdfBytes';
 
 /** A row (with the clicked cell's column) or a column heading. */
 type Selection = { sheet: string; kind: 'row' | 'col'; index: number; col?: number; page?: number } | null;
@@ -237,7 +236,7 @@ function PageView({
 export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; estimate: Estimate; onClose: () => void }) {
   const toast = useToast();
   const [stored, setStored] = usePersistentState<Partial<PdfSettings>>(settingsKey(dpr.id), DEFAULT_PDF_SETTINGS);
-  const settings = useMemo(() => withDefaults(stored), [stored]);
+  const baseSettings = useMemo(() => withDefaults(stored), [stored]);
   const set = (patch: Partial<PdfSettings>) => setStored((cur) => ({ ...withDefaults(cur), ...patch }));
   const setSheet = (key: string, patch: Partial<SheetSettings>) =>
     setStored((cur) => {
@@ -266,8 +265,8 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
   }, []);
   useEffect(() => {
     let live = true;
-    buildEstimateWorkbook(dpr, estimate)
-      .then((wb) => live && setFromEstimate(sheetsFromWorkbook(wb)))
+    estimateSheets(dpr, estimate)
+      .then((list) => live && setFromEstimate(list))
       .catch(() => live && setFromEstimate([]));
     return () => {
       live = false;
@@ -285,6 +284,7 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
   }, [onClose]);
 
   const sheets = file?.sheets ?? fromEstimate;
+  const settings = useMemo(() => orderFor(baseSettings, sheets ?? []), [baseSettings, sheets]);
   const orderedSheets = useMemo(() => orderSheets(sheets ?? [], settings.sheetOrder), [sheets, settings.sheetOrder]);
   // Moving a sheet starts the page order afresh, so the sheet's pages move with it.
   const moveSheet = (k: number, by: number) => {

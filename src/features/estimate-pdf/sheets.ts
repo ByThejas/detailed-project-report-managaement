@@ -162,7 +162,8 @@ export function sheetsFromWorkbook(wb: Workbook): PdfSheet[] {
   wb.eachSheet((ws) => {
     if (NOT_ESTIMATE.test(ws.name)) return;
     const s = sheetFromWorksheet(ws);
-    if (s && s.rows.length) out.push(s);
+    // A part with nothing in it (the station sheets of a line-work DPR) prints only its closing rows and no figures: left out.
+    if (s && s.rows.some((r) => !r.total && r.cells.slice(1).some((c) => /\d/.test(c)))) out.push(s);
   });
   const rank = (k: string) => {
     const i = ORDER.indexOf(k);

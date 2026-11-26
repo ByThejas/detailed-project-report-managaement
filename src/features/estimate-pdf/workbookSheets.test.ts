@@ -69,3 +69,17 @@ describe('estimate sheets in the final DPR', () => {
     ]);
   });
 });
+
+describe('parts with nothing in them', () => {
+  it('leave an empty station part out of a line-work PDF', async () => {
+    const { default: ExcelJS } = await import('exceljs');
+    const { sheetsFromWorkbook } = await import('./sheets');
+    const wb = new ExcelJS.Workbook();
+    const head = ['Sl No.', 'Name of the Equipment/Materials', 'Unit', 'Qty', 'Rate', 'Amount'];
+    const empty = wb.addWorksheet('Part A Electrical');
+    empty.addRows([['Supply of station materials'], head, ['', 'Sub Total'], ['', 'Miscellaneous'], ['', 'Grand Total']]);
+    const line = wb.addWorksheet('Line Supply');
+    line.addRows([['Line works'], head, ['A1', 'ACSR Drake conductor', 'km', 3, 100, 300], ['', 'Grand Total', '', '', '', 300]]);
+    expect(sheetsFromWorkbook(wb).map((s) => s.key)).toEqual(['Line Supply']);
+  });
+});

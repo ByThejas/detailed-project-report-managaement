@@ -5,7 +5,7 @@ import { readJson } from '@/lib/storage';
 import { withDefaults, type PdfSettings } from './format';
 import { layout } from './layout';
 import { loadFonts, renderPdf } from './renderPdf';
-import { sheetsFromWorkbook } from './sheets';
+import { sheetsFromWorkbook, type PdfSheet } from './sheets';
 import { columnWidths, placeEstimateSheets, type EstimateWorkbook } from './workbookSheets';
 import { BOQ_DOCUMENTS } from '@/features/boq-import/api';
 import { parseBoq } from '@/features/boq-import/parse';
@@ -23,10 +23,30 @@ export const settingsKey = (dprId: string) => `dpr-estimate-pdf:${dprId}`;
  */
 export async function estimatePdfBytes(dpr: DprRow, estimate: Estimate, fallback: Partial<PdfSettings> = {}): Promise<Uint8Array | null> {
   const saved = readJson<Partial<PdfSettings> | null>(settingsKey(dpr.id), null);
-  const settings = withDefaults({ ...fallback, ...(saved ?? {}) });
-  const sheets = sheetsFromWorkbook(await buildEstimateWorkbook(dpr, estimate));
+  const sheets = await estimateSheets(dpr, estimate);
+  const settings = orderFor(withDefaults({ ...fallback, ...(saved ?? {}) }), sheets);
   const pages = layout(sheets, settings, await loadFonts());
   return pages.length ? renderPdf(pages, `Abstract & Estimate · ${dpr.project}`) : null;
+}
+
+/**
+ * Every sheet the Abstract & Estimate PDF prints, in the set order: the app's estimate sheets (parts with nothing in
+ * them left out) and the uploaded estimate workbook's other sheets in their places (see SLOTS in workbookSheets).
+ */
+export async function estimateSheets(dpr: DprRow, estimate: Estimate, documents?: DprDocuments): Promise<PdfSheet[]> {
+  const app = sheetsFromWorkbook(await buildEstimateWorkbook(dpr, estimate));
+  const { workbooks } = await estimateWorkbooks(dpr.id, documents).catch(() => ({ workbooks: [] as EstimateWorkbook[] }));
+  return placeEstimateSheets(app, workbooks).map((p) => p.sheet);
+}
+
+/**
+ * A sheet order saved in the editor before sheets were added (a workbook uploaded since) would push the new sheets to
+ * the end; such an order is dropped so the set order applies.
+ */
+export function orderFor(settings: PdfSettings, sheets: { key: string }[]): PdfSettings {
+  const order = settings.sheetOrder;
+  if (!order?.length || sheets.every((x) => order.includes(x.key))) return settings;
+  return { ...settings, sheetOrder: undefined, pageOrder: undefined };
 }
 
 /**
