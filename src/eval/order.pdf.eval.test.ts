@@ -2,7 +2,7 @@ import { readFileSync, readdirSync, statSync, existsSync, writeFileSync } from '
 import { join } from 'node:path';
 import { workbookToGrids } from '@/features/boq-import/readWorkbook';
 import { parseBoq } from '@/features/boq-import/parse';
-import { columnWidths, placeEstimateSheets, SLOTS } from '@/features/estimate-pdf/workbookSheets';
+import { placeEstimateSheets, SLOTS, workbookLayout } from '@/features/estimate-pdf/workbookSheets';
 import { layout } from '@/features/estimate-pdf/layout';
 import { loadFonts, renderPdf } from '@/features/estimate-pdf/renderPdf';
 import { withDefaults } from '@/features/estimate-pdf/format';
@@ -35,7 +35,7 @@ it.skipIf(!ROOT || !existsSync(ROOT))('final DPR estimate order', async () => {
     for (const s of read.sheets) if (used.has(s.name) && read.items.some((i) => i.sheet === s.name)) keys.add(SECTION_SHEET[s.section ?? read.section]!);
     for (const a of read.abstracts ?? []) keys.add(ABSTRACT_SHEET[a.part]!);
     const app = [...keys].map((key) => ({ key, title: key, notes: [], columns: [], rows: [] }));
-    const wb = { fileName: name, grids, read, widths: await columnWidths(new Uint8Array(readFileSync(f)).buffer) };
+    const wb = { fileName: name, grids, read, ...(await workbookLayout(new Uint8Array(readFileSync(f)).buffer)) };
     const placed = placeEstimateSheets(app, [wb]);
     out.push(`\n## ${f.replace(ROOT, '')}`);
     for (const p of placed) out.push(`  ${SLOTS[p.slot]}`.padEnd(32) + (p.from === 'estimate' ? ` [estimate] ${p.name}` : ` [workbook] ${JSON.stringify(p.name)}`));

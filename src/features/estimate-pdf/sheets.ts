@@ -14,6 +14,8 @@ export interface PdfRow {
   bold: boolean;
   /** A closing row of a BOQ sheet (sub total, miscellaneous, total): a label with no code or quantity. */
   total?: boolean;
+  /** Cells merged across columns, as [first, last] column indexes: the text prints once across them, as in the Excel. */
+  spans?: [number, number][];
 }
 
 /** One estimate or abstract sheet, reduced to what the PDF prints. */

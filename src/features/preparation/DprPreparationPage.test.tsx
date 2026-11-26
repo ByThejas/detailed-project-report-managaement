@@ -113,6 +113,40 @@ describe('DPR Preparation', () => {
     expect(within(again).getAllByRole('combobox')[0]).toHaveTextContent(/Your earlier choice · 1\.11/);
   });
 
+  it('moves, picks and ticks rate matches with the keyboard', async () => {
+    seed([row({ ...KOGALI, capacity: '1x12.5 MVA', voltage: '110 kV' })]);
+    renderAt(url);
+    await openStep('Estimate');
+    const card = screen.getByRole('region', { name: 'Price from the rate catalog' });
+    await userEvent.click(within(card).getByRole('button', { name: 'Find rates' }));
+    await within(card).findByRole('table', { name: 'Rate suggestions' }, { timeout: 8000 });
+    await userEvent.click(within(card).getByRole('checkbox', { name: 'Only items without a rate' }));
+    const table = within(card).getByRole('table', { name: 'Rate suggestions' });
+    const keys = within(card).getByRole('group', { name: /arrow keys move between items/ });
+    keys.focus();
+    await userEvent.keyboard('{ArrowDown}{ArrowDown}');
+    const rows = within(table).getAllByRole('row').slice(1);
+    expect(rows[1]).toHaveAttribute('aria-current', 'true');
+    expect(rows[1]).toHaveFocus();
+    await userEvent.keyboard('{ArrowUp}');
+    expect(rows[0]).toHaveAttribute('aria-current', 'true');
+    const pick = within(rows[0]!).getByRole('combobox');
+    await userEvent.keyboard('2');
+    expect(pick).toHaveValue('1');
+    await userEvent.keyboard('1');
+    expect(pick).toHaveValue('0');
+    const tick = within(rows[0]!).getByRole('checkbox');
+    const before = (tick as HTMLInputElement).checked;
+    await userEvent.keyboard(' ');
+    expect((tick as HTMLInputElement).checked).toBe(!before);
+    // Typing in a box is never taken as a shortcut.
+    await userEvent.selectOptions(pick, 'SoR code typed by hand…');
+    const code = within(rows[0]!).getByRole('textbox', { name: /SoR code for/ });
+    await userEvent.type(code, '1.11');
+    expect(code).toHaveValue('1.11');
+    expect(pick).toHaveValue('-1');
+  });
+
   it('works out B/C ratio, IRR and payback the KPTCL way from the BCR inputs', async () => {
     seed([KOGALI]);
     renderAt(url);

@@ -26,10 +26,35 @@ const isXls = (buffer: ArrayBuffer) => buffer.byteLength > 8 && new Uint8Array(b
 
 /** Reads every sheet of an .xlsx (or old .xls) into grids. Merged cells keep their value only in the top-left cell. */
 export async function workbookToGrids(buffer: ArrayBuffer): Promise<SheetGrid[]> {
-  if (isXls(buffer)) return xlsToGrids(buffer);
+  return (await workbookGridsAndWidths(buffer)).grids;
+}
+
+/**
+ * The grids of `workbookToGrids` and each sheet's column widths in Excel units (null for a hidden column), from one
+ * read of the file. An .xls has no widths here (they come from the text).
+ */
+export async function workbookGridsAndWidths(
+  buffer: ArrayBuffer,
+): Promise<{ grids: SheetGrid[]; widths: Record<string, (number | null)[]>; merges?: Record<string, string[]> }> {
+  if (isXls(buffer)) return { grids: await xlsToGrids(buffer), widths: {} };
   const ExcelJS = (await import('exceljs')).default;
   const wb = new ExcelJS.Workbook();
   await wb.xlsx.load(buffer);
+  const widths: Record<string, (number | null)[]> = {};
+  // Merged cell ranges ("A14:K14") per sheet, so a printed sheet can merge them as the Excel does.
+  const merges: Record<string, string[]> = {};
+  try {
+    wb.eachSheet((ws) => {
+      const n = Math.min(ws.columnCount, 200);
+      widths[ws.name] = Array.from({ length: n }, (_, i) => {
+        const col = ws.getColumn(i + 1);
+        return col.hidden || col.width === 0 ? null : (col.width ?? 8.43);
+      });
+      merges[ws.name] = ((ws.model as { merges?: string[] }).merges ?? []).slice();
+    });
+  } catch {
+    // Widths are only a layout hint: a sheet whose columns can't be read takes its widths from the text.
+  }
   const sheets: SheetGrid[] = [];
   wb.eachSheet((ws) => {
     const rows: Cell[][] = [];
@@ -55,7 +80,7 @@ export async function workbookToGrids(buffer: ArrayBuffer): Promise<SheetGrid[]>
     });
     sheets.push({ name: ws.name, hidden: ws.state !== 'visible', rows: Array.from(rows, (r) => r ?? []), hiddenRows });
   });
-  return sheets;
+  return { grids: sheets, widths, merges };
 }
 
 export const isReadableBoq = (fileName: string) => /\.xls[xm]?$/i.test(fileName);

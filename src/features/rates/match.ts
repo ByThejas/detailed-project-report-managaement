@@ -221,6 +221,66 @@ function indexOf(all: CatalogItem[]): RateIndex {
   return { items, toks, idf, norms, hv };
 }
 
+/** Per-item facts the matcher needs for every line, worked out once per index instead of once per line × item. */
+interface Prepared {
+  /** Item numbers (ascending) holding each word. */
+  postings: Map<string, number[]>;
+  sizes: Map<string, Set<string>>[];
+  unitKinds: UnitKind[];
+  /** For each OPPOSITES pair, whether the item is the first word and whether the second (two flags per pair). */
+  opposites: boolean[][];
+  hasRatio: boolean[];
+  hasConductor: boolean[];
+  csr: boolean[];
+  utilization: boolean[];
+}
+const sizesOf = (set: Iterable<string>) => {
+  const out = new Map<string, Set<string>>();
+  for (const t of set) {
+    const m = /^(\d+(?:\.\d+)?)([a-z]+)$/.exec(t);
+    if (m && SIZE_UNITS.includes(m[2]!)) out.set(m[2]!, (out.get(m[2]!) ?? new Set()).add(m[1]!));
+  }
+  return out;
+};
+const PREPARED = new WeakMap<Set<string>[], Prepared>();
+function prepared(index: RateIndex): Prepared {
+  const hit = PREPARED.get(index.toks);
+  if (hit) return hit;
+  const postings = new Map<string, number[]>();
+  index.toks.forEach((s, i) => {
+    for (const t of s) {
+      const list = postings.get(t);
+      if (list) list.push(i);
+      else postings.set(t, [i]);
+    }
+  });
+  const p: Prepared = {
+    postings,
+    sizes: index.toks.map((s) => sizesOf(s)),
+    unitKinds: index.items.map((item) => unitKind(item.unit)),
+    opposites: index.items.map((item, i) => {
+      const s = index.toks[i]!;
+      let order: string[] | null = null;
+      return OPPOSITES.flatMap(([a, b]) => {
+        let ia = s.has(a);
+        let ib = s.has(b);
+        if (ia && ib) {
+          order ??= tokens(item.item);
+          ia = order.lastIndexOf(a) > order.lastIndexOf(b);
+          ib = !ia;
+        }
+        return [ia, ib];
+      });
+    }),
+    hasRatio: index.toks.map((s) => [...s].some((t) => t.startsWith('ratio'))),
+    hasConductor: index.toks.map((s) => CONDUCTORS.some((c) => s.has(c))),
+    csr: index.items.map((item) => /SR-CSR/i.test(item.sheet)),
+    utilization: index.items.map((item) => item.sheet.startsWith('utilization')),
+  };
+  PREPARED.set(index.toks, p);
+  return p;
+}
+
 export interface RateSuggestion {
   item: CatalogItem;
   /** 0–1: how alike the line and the item are (cosine of their weighted words). */
@@ -487,75 +547,91 @@ function suggestFrom(index: RateIndex, line: LineBasis & Pick<EstimateLine, 'des
   const lu = unitKind(line.unit);
   const allowed = SHEETS[line.section];
   const scored: { i: number; score: number; shared: number }[] = [];
-  index.items.forEach((item, i) => {
-    if (!civilBook && !allowed(item.sheet)) return;
+  const prep = prepared(index);
+  // Only items sharing a word with the line can score; they are visited in catalog order, as a full scan would.
+  // Each item's dot product and shared-word count add up word by word, in the line's word order (as a scan of the
+  // item's words would), so the scores are the same to the last bit.
+  const dots = new Float64Array(index.items.length);
+  const sharedOf = new Uint16Array(index.items.length);
+  const candidates: number[] = [];
+  for (const t of lt) {
+    const w2 = weight(t) ** 2;
+    for (const i of prep.postings.get(t) ?? []) {
+      if (!sharedOf[i]) candidates.push(i);
+      dots[i] += w2;
+      sharedOf[i] += 1;
+    }
+  }
+  candidates.sort((a, b) => a - b);
+  const factors = new Map<string, number | null>();
+  const factorOf = (unit: string) => {
+    if (!factors.has(unit)) factors.set(unit, unitFactor(line.unit, unit));
+    return factors.get(unit)!;
+  };
+  const lineRatios = [...own].filter((t) => t.startsWith('ratio'));
+  const lineCond = CONDUCTORS.filter((c) => own.has(c) || fromGroup.has(c));
+  const ownOrGroup = (t: string) => own.has(t) || fromGroup.has(t);
+  const linePerNo = lu === 'count' && !!weightPerNo(line);
+  const lineOpp = OPPOSITES.flatMap(([a, b]) => [ownOrGroup(a), ownOrGroup(b)]);
+  const partWords = PART_WORDS.filter((w) => !ownOrGroup(w));
+  for (const i of candidates) {
+    const item = index.items[i]!;
+    if (!civilBook && !allowed(item.sheet)) continue;
     const s = index.toks[i]!;
-    let dot = 0;
-    let shared = 0;
-    for (const t of lt)
-      if (s.has(t)) {
-        dot += weight(t) ** 2;
-        shared += 1;
-      }
-    if (!dot) return;
+    const dot = dots[i]!;
+    const shared = sharedOf[i]!;
+    if (!dot) continue;
     // Cosine, softened toward the line's own coverage so long catalog texts are not punished too hard.
     const coverage = dot / lineNorm ** 2;
     const cosine = dot / (lineNorm * index.norms[i]!);
     let score = Math.sqrt(coverage * cosine);
-    const iu = unitKind(item.unit);
+    const iu = prep.unitKinds[i]!;
     // A line priced by weight or length (towers in MT, conductor in km) is never a counted item, and the reverse.
     // A structure bought by weight is steel, not the equipment it carries ("66 kV isolator (0.532 t per structure)").
     if (steelLine && !s.has(STEEL)) score *= 0.4;
-    const byWeight = lu === 'count' && iu === 'weight' && !!weightPerNo(line);
+    const byWeight = lu === 'count' && iu === 'weight' && linePerNo;
     if (lu !== 'other' && iu !== 'other' && lu !== iu && !byWeight) score *= (lu === 'count') !== (iu === 'count') ? 0.5 : 0.7;
     // A different voltage class is a different item (a 66 kV transformer is not a 110 kV one).
     const ihv = index.hv[i]!;
     if (lineHv !== null && ihv.size && !ihv.has(lineHv)) score *= 0.6;
     // A different size (12.5 MVA against 16/20 MVA, 1000 sq mm against 630) is a different item too.
+    const itemSizes = prep.sizes[i]!;
     if (lineSizes.size) {
-      const itemSizes = sizes(s);
       for (const [unit, values] of lineSizes) {
         const theirs = itemSizes.get(unit);
         if (theirs && ![...values].some((v) => theirs.has(v))) score *= 0.55;
       }
     }
     // A unit that converts (km against a rate per metre) is as good as the same unit.
-    if (lu !== iu && unitFactor(line.unit, item.unit) !== null) score /= (lu === 'count') !== (iu === 'count') ? 0.5 : 0.7;
+    if (lu !== iu && factorOf(item.unit) !== null) score /= (lu === 'count') !== (iu === 'count') ? 0.5 : 0.7;
     // Opposites: an indoor kit is not an outdoor one, copper is not aluminium. An item naming both
     // ("Indoor/Outdoor 11 kV CT … OUTDOOR") is the one its text names last.
-    for (const [a, b] of OPPOSITES) {
-      let ia = s.has(a);
-      let ib = s.has(b);
-      if (ia && ib) {
-        const order = tokens(item.item);
-        ia = order.lastIndexOf(a) > order.lastIndexOf(b);
-        ib = !ia;
-      }
-      if ((own.has(a) || fromGroup.has(a)) && ib && !ia) score *= 0.6;
-      if ((own.has(b) || fromGroup.has(b)) && ia && !ib) score *= 0.6;
+    const opp = prep.opposites[i]!;
+    for (let k = 0; k < OPPOSITES.length; k++) {
+      const ia = opp[2 * k]!;
+      const ib = opp[2 * k + 1]!;
+      if (lineOpp[2 * k] && ib && !ia) score *= 0.6;
+      if (lineOpp[2 * k + 1] && ia && !ib) score *= 0.6;
     }
     // A rating the job names (an ampacity of 700 A) and the line leaves out: an item of another one fits less well.
     for (const [unit, values] of jobSizes) {
-      const theirs = sizes(s).get(unit);
+      const theirs = itemSizes.get(unit);
       if (!lineSizes.has(unit) && theirs && ![...values].some((v) => theirs.has(v))) score *= 0.85;
     }
     // A different CT ratio is a different CT.
-    const lineRatios = [...own].filter((t) => t.startsWith('ratio'));
     if (lineRatios.length) {
-      const theirs = [...s].filter((t) => t.startsWith('ratio'));
-      if (theirs.length && !lineRatios.some((t) => s.has(t))) score *= 0.55;
+      if (prep.hasRatio[i] && !lineRatios.some((t) => s.has(t))) score *= 0.55;
     }
     // Hardware for Moose conductor is not hardware for Coyote.
-    const lineCond = CONDUCTORS.filter((c) => own.has(c) || fromGroup.has(c));
-    if (lineCond.length && CONDUCTORS.some((c) => s.has(c)) && !lineCond.some((c) => s.has(c))) score *= 0.6;
+    if (lineCond.length && prep.hasConductor[i] && !lineCond.some((c) => s.has(c))) score *= 0.6;
     // An item that is only one part of a thing (bolts and nuts of a tower) is not the thing itself.
-    for (const w of PART_WORDS) if (s.has(w) && !own.has(w) && !fromGroup.has(w)) score *= 0.6;
+    for (const w of partWords) if (s.has(w)) score *= 0.6;
     // KPTCL works are priced from the KPTCL SR; the ESCOM 11 kV stock list is a fallback (0.75 tested best on 21 KPTCL workbooks).
-    if (line.section !== 'civil' && /SR-CSR/i.test(item.sheet)) score *= 0.75;
+    if (line.section !== 'civil' && prep.csr[i]) score *= 0.75;
     // Station building services (rubber mats, fire extinguishers, lighting) are in the utilization schedule.
-    if (line.section === 'electrical' && item.sheet.startsWith('utilization')) score *= 0.75;
+    if (line.section === 'electrical' && prep.utilization[i]) score *= 0.75;
     scored.push({ i, score, shared });
-  });
+  }
   scored.sort((a, b) => b.score - a.score);
   return scored.slice(0, max).map(({ i, score, shared }) => suggestionFor(index.items[i]!, line, Math.min(1, score), shared));
 }

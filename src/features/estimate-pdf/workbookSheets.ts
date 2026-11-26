@@ -233,7 +233,7 @@ const cellOut = (v: Cell | undefined): string => {
  * header down as the file has it (hidden and empty rows left out), so annexures, compensation statements and the
  * signature rows print as in the Excel. Null for a sheet with nothing to print.
  */
-export function sheetFromGrid(g: SheetGrid, key: string, widths?: (number | null)[]): PdfSheet | null {
+export function sheetFromGrid(g: SheetGrid, key: string, widths?: (number | null)[], merges?: string[]): PdfSheet | null {
   const hidden = new Set(g.hiddenRows ?? []);
   const h = headerRowOf(g);
   const titleRows = titleRowsOf(g);
@@ -242,6 +242,8 @@ export function sheetFromGrid(g: SheetGrid, key: string, widths?: (number | null
   const title = named.join(' ').slice(0, 300) || g.name.trim();
   const start = h < 0 ? 0 : h;
   const body: string[][] = [];
+  /** The Excel row (1-based) of each body row, to find the merges that start on it. */
+  const bodyRows: number[] = [];
   let blank = 0;
   for (let r = start + (h < 0 ? 0 : 1); r < g.rows.length; r++) {
     if (hidden.has(r + 1)) continue;
@@ -252,6 +254,7 @@ export function sheetFromGrid(g: SheetGrid, key: string, widths?: (number | null
     }
     blank = 0;
     body.push(cells);
+    bodyRows.push(r + 1);
   }
   const headerCells = h < 0 ? [] : (g.rows[h] ?? []).map(cellOut);
   // Columns that print: not hidden in Excel and with something in them (Excel's narrow spacer columns are left out).
@@ -273,10 +276,15 @@ export function sheetFromGrid(g: SheetGrid, key: string, widths?: (number | null
     else groups.push([c]);
   }
   const header = groups.map((gr) => headerCells[gr[0]!] ?? '');
-  const rows: PdfRow[] = body.map((r) => {
+  const groupOf = new Map(groups.flatMap((gr, i) => gr.map((c) => [c, i] as const)));
+  const merged = (merges ?? []).map(parseRange).filter((m): m is Range => !!m && m.c2 > m.c1);
+  const rows: PdfRow[] = body.map((r, k) => {
     const cells = groups.map((gr) => gr.map((c) => r[c] ?? '').filter(Boolean).join(' '));
     const label = cells.find((t) => t) ?? '';
-    return { cells, bold: /^(sub[\s-]*)?total|grand\s*total|^say\b/i.test(label) };
+    const row: PdfRow = { cells, bold: /^(sub[\s-]*)?total|grand\s*total|^say\b/i.test(label) };
+    const spans = merges ? spansOf(merged, bodyRows[k]!, groupOf) : guessSpan(cells, groups, widths);
+    if (spans.length) row.spans = spans;
+    return row;
   });
   const filled = new Array<number>(groups.length).fill(0);
   const numeric = new Array<number>(groups.length).fill(0);
@@ -295,6 +303,50 @@ export function sheetFromGrid(g: SheetGrid, key: string, widths?: (number | null
     align: i === 0 ? 'center' : filled[i]! > 0 && numeric[i]! / filled[i]! > 0.6 ? 'right' : 'left',
   }));
   return { key, title: printable(title), notes: project ? [printable(project)] : [], columns, rows, weights };
+}
+
+interface Range {
+  r1: number;
+  r2: number;
+  c1: number;
+  c2: number;
+}
+const colNo = (letters: string) => [...letters].reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0) - 1;
+/** "A14:K14" as 1-based rows and 0-based columns. */
+function parseRange(ref: string): Range | null {
+  const m = /^\$?([A-Z]+)\$?(\d+):\$?([A-Z]+)\$?(\d+)$/.exec(ref.toUpperCase());
+  if (!m) return null;
+  return { c1: colNo(m[1]!), r1: Number(m[2]), c2: colNo(m[3]!), r2: Number(m[4]) };
+}
+
+/** The printed columns an Excel row's merged cells cover, as [first, last] pairs of printed column indexes. */
+function spansOf(merged: Range[], excelRow: number, groupOf: Map<number, number>): [number, number][] {
+  const out: [number, number][] = [];
+  for (const m of merged) {
+    // Only merges within one row: a block over several rows (a value standing for a whole group of items) prints its
+    // text in its first row, and the rows under it keep their own cells.
+    if (m.r1 !== m.r2 || excelRow !== m.r1) continue;
+    const idx = [];
+    for (let c = m.c1; c <= m.c2; c++) if (groupOf.has(c)) idx.push(groupOf.get(c)!);
+    if (!idx.length) continue;
+    const from = Math.min(...idx);
+    const to = Math.max(...idx);
+    if (to > from && !out.some(([a, b]) => from <= b && to >= a)) out.push([from, to]);
+  }
+  return out.sort((a, b) => a[0] - b[0]);
+}
+
+/**
+ * For a file whose merges cannot be read (an old .xls): a row with one text, far too long for its column and nothing
+ * to its right (a "Note: …" under the table), prints across the rest of the row, as such a note is merged in the Excel.
+ */
+function guessSpan(cells: string[], groups: number[][], widths?: (number | null)[]): [number, number][] {
+  const filled = cells.map((t, i) => (t ? i : -1)).filter((i) => i >= 0);
+  if (filled.length !== 1) return [];
+  const i = filled[0]!;
+  if (i >= cells.length - 1) return [];
+  const chars = widths ? groups[i]!.reduce((a, c) => a + (widths[c] ?? 8.43), 0) : 12;
+  return cells[i]!.length > Math.max(40, chars * 3) ? [[i, cells.length - 1]] : [];
 }
 
 /** The estimate sheets the app prints, by worksheet name, and where they go. */
@@ -320,6 +372,8 @@ export interface EstimateWorkbook {
   read: BoqReadResult;
   /** Excel column widths per sheet (characters; null for a hidden column), where the file gives them. */
   widths?: Record<string, (number | null)[]>;
+  /** Merged cell ranges per sheet ("A14:K14"), where the file gives them. */
+  merges?: Record<string, string[]>;
 }
 
 export interface PlacedSheet {
@@ -372,29 +426,39 @@ export function placeEstimateSheets(appSheets: PdfSheet[], workbooks: EstimateWo
       if (covered) return;
       const g = wb.grids.find((x) => x.name === p.name)!;
       const key = `${wb.fileName} › ${p.name}`.replace(/abstract/gi, 'Abs.');
-      const sheet = sheetFromGrid(g, key, wb.widths?.[g.name]);
+      const sheet = sheetFromGrid(g, key, wb.widths?.[g.name], wb.merges?.[g.name]);
       if (sheet) out.push({ sheet, slot: p.slot, from: wb.fileName, name: p.name.trim(), order: 1000 * (w + 1) + i });
     });
   });
   return out.sort((a, b) => a.slot - b.slot || a.order - b.order).map(({ sheet, slot, from, name }) => ({ sheet, slot, from, name }));
 }
 
-/** Column widths of every sheet of an .xlsx, as Excel stores them (null for a hidden column). Empty for an old .xls. */
-export async function columnWidths(buffer: ArrayBuffer): Promise<Record<string, (number | null)[]>> {
-  const out: Record<string, (number | null)[]> = {};
+/**
+ * Column widths (null for a hidden column) and merged cell ranges of every sheet of an .xlsx, as Excel stores them.
+ * Empty for an old .xls.
+ */
+export async function workbookLayout(buffer: ArrayBuffer): Promise<{ widths: Record<string, (number | null)[]>; merges: Record<string, string[]> }> {
+  const widths: Record<string, (number | null)[]> = {};
+  const merges: Record<string, string[]> = {};
   try {
     const ExcelJS = (await import('exceljs')).default;
     const wb = new ExcelJS.Workbook();
     await wb.xlsx.load(buffer);
     wb.eachSheet((ws) => {
       const n = Math.min(ws.columnCount, 200);
-      out[ws.name] = Array.from({ length: n }, (_, i) => {
+      widths[ws.name] = Array.from({ length: n }, (_, i) => {
         const col = ws.getColumn(i + 1);
         return col.hidden || col.width === 0 ? null : (col.width ?? 8.43);
       });
+      merges[ws.name] = ((ws.model as { merges?: string[] }).merges ?? []).slice();
     });
   } catch {
     // An .xls or a damaged file: widths come from the text.
   }
-  return out;
+  return { widths, merges };
+}
+
+/** Column widths of every sheet of an .xlsx, as Excel stores them (null for a hidden column). Empty for an old .xls. */
+export async function columnWidths(buffer: ArrayBuffer): Promise<Record<string, (number | null)[]>> {
+  return (await workbookLayout(buffer)).widths;
 }

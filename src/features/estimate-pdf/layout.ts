@@ -14,8 +14,8 @@ export type Op =
 export interface TableBox {
   /** Column boundaries, left to right (columns + 1 values). */
   xs: number[];
-  /** Rows on this page; index -1 is the header. */
-  rows: { index: number; y: number; h: number }[];
+  /** Rows on this page; index -1 is the header. Spans are the row's merged cells, [first, last] column. */
+  rows: { index: number; y: number; h: number; spans?: [number, number][] }[];
 }
 
 export interface Page {
@@ -133,6 +133,18 @@ export function pageSettings(s: PdfSettings, key: string, sheetPage: number): { 
   const base = sheetSettings(s, key);
   const cols = base.pageColWeights?.[String(sheetPage)];
   return { style, ss: cols ? { ...base, colWeights: cols } : base };
+}
+
+/** A row's merged cells: the editor's for that row where it has set them, else the Excel's. Overlapping or bad pairs are dropped. */
+export function rowSpans(row: { spans?: [number, number][] }, ss: SheetSettings, index: number, columns: number): [number, number][] {
+  const own = ss.merges?.[String(index)];
+  const out: [number, number][] = [];
+  for (const [a, b] of own ?? row.spans ?? []) {
+    const from = Math.max(0, Math.min(a, b));
+    const to = Math.min(columns - 1, Math.max(a, b));
+    if (to > from && !out.some(([x, y]) => from <= y && to >= x)) out.push([from, to]);
+  }
+  return out.sort((p, q) => p[0] - q[0]);
 }
 
 /** Column widths in points that fill the table width, from the user's weights or KPTCL's standard widths. */
@@ -261,8 +273,8 @@ function layoutPage(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure:
   };
 
   // Cell text and the row's height.
-  const rowBlock = (cells: string[], size: number, bold: boolean, fixed?: number, cellBold?: (i: number) => boolean) => {
-    const lines = cells.map((c, i) => wrapLines(c, Math.max(widths[i]! - padL - padR, 4), size, cellBold?.(i) ?? bold, measure));
+  const rowBlock = (cells: string[], size: number, bold: boolean, fixed?: number, cellBold?: (i: number) => boolean, cellWidth = (i: number) => widths[i]!) => {
+    const lines = cells.map((c, i) => wrapLines(c, Math.max(cellWidth(i) - padL - padR, 4), size, cellBold?.(i) ?? bold, measure));
     const count = Math.max(...lines.map((l) => l.length));
     if (abs) return { lines, height: fixed ?? count * size * spacing + rowExtra(A.body.extra) };
     const natural = count * size * s.lineSpacing;
@@ -343,9 +355,17 @@ function layoutPage(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure:
     if (s.borders === 'outer' && headed && t.rows[1]) line(left, t.rows[1].y, right, t.rows[1].y, s.innerLine);
     if (s.borders === 'grid')
       xs.slice(1, -1).forEach((x, k) => {
-        // Inside a group the line starts under the group's heading.
-        const from = headed && inGroupBand(k + 1) ? top + groupH : top;
-        line(x, from, x, end, s.innerLine);
+        const b = k + 1;
+        // Inside a group the line starts under the group's heading; it stops at merged cells, which have no line inside.
+        let from: number | null = headed && inGroupBand(b) ? top + groupH : top;
+        for (const r of t.rows) {
+          const inside = r.spans?.some(([a, z]) => a < b && b <= z);
+          if (inside) {
+            if (from !== null && r.y > from) line(x, from, x, r.y, s.innerLine);
+            from = null;
+          } else if (from === null) from = r.y;
+        }
+        if (from !== null && end > from) line(x, from, x, end, s.innerLine);
       });
     if (s.borders !== 'none') {
       // Under the abstract's title rows the table's top edge is an inside line; the frame goes round the whole block.
@@ -373,13 +393,29 @@ function layoutPage(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure:
     const cells = row.cells.map((c, i) => ss.cells?.[`${index}:${i}`] ?? (row.total && i === desc ? totalLabel(c) : c));
     // Item numbers like A1, A12 print bold; sub-items (a, b, i, 1) do not.
     const cellBold = (i: number) => (row.total && i === desc) || bold || (roles[i] === 'sl' && /^[A-Z]{1,3}\d+$/.test(cells[i]!.trim()));
-    const block = rowBlock(cells, sizes.body, bold, ss.rowHeights?.[String(index)], cellBold);
+    // Merged cells print their text once, across the merged columns; the text of every cell under it is kept, joined.
+    const spans = rowSpans(row, ss, index, cells.length);
+    const spanAt = (i: number) => spans.find(([a]) => a === i);
+    const covered = (i: number) => spans.some(([a, z]) => i > a && i <= z);
+    for (const [a, z] of spans) {
+      cells[a] = cells.slice(a, z + 1).filter((t) => t.trim()).join(' ');
+      for (let i = a + 1; i <= z; i++) cells[i] = '';
+    }
+    const cellWidth = (i: number) => {
+      const sp = spanAt(i);
+      return sp ? xs[sp[1] + 1]! - xs[sp[0]]! : widths[i]!;
+    };
+    const block = rowBlock(cells, sizes.body, bold, ss.rowHeights?.[String(index)], cellBold, cellWidth);
     // A row that does not fit starts the next page (a page always takes at least one row).
     if (y + block.height > bottom && page.table!.rows.some((r) => r.index >= 0)) break;
-    block.lines.forEach((l, i) =>
-      drawCell(l, i, y, block.height, sizes.body, cellBold(i), row.total && i === desc ? 'center' : aligns[i]!, s.justify && !abs && i === desc && !row.total, step),
-    );
-    page.table!.rows.push({ index, y, h: block.height });
+    block.lines.forEach((l, i) => {
+      if (covered(i)) return;
+      const sp = spanAt(i);
+      // Merged text reads from the left, as a note across the row does in the Excel.
+      const align = sp ? (aligns[i] === 'center' ? 'left' : aligns[i]!) : row.total && i === desc ? 'center' : aligns[i]!;
+      drawCell(l, i, y, block.height, sizes.body, cellBold(i), align, s.justify && !abs && (i === desc || !!sp) && !row.total, step, xs[i]!, xs[(sp ? sp[1] : i) + 1]!);
+    });
+    page.table!.rows.push(spans.length ? { index, y, h: block.height, spans } : { index, y, h: block.height });
     y += block.height;
   }
   closeTable();

@@ -1,4 +1,4 @@
-import { useMemo, useState } from 'react';
+import { useMemo, useRef, useState, type KeyboardEvent } from 'react';
 import { BookOpen, TriangleAlert } from 'lucide-react';
 import { Card, CardHeader } from '@/components/ui/Card';
 import { formatNumber } from '@/lib/format';
@@ -117,6 +117,51 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
   };
   const ticked = lines.filter((l) => choiceOf(l.id).apply && chosen(l));
 
+  // Keyboard: ↑/↓ (or k/j) move between items, 1–3 pick that match, Space (or x) ticks the item. Keys typed in a
+  // box or a list (an SoR code, a weight, the match list's own arrows) are left alone.
+  const [activeId, setActiveId] = useState<string | null>(null);
+  const rowRefs = useRef(new Map<string, HTMLTableRowElement>());
+  const onKeys = (ev: KeyboardEvent<HTMLDivElement>) => {
+    if (ev.altKey || ev.ctrlKey || ev.metaKey) return;
+    const t = ev.target as HTMLElement;
+    const onCheckbox = t instanceof HTMLInputElement && t.type === 'checkbox';
+    if (t instanceof HTMLSelectElement || t instanceof HTMLTextAreaElement || (t instanceof HTMLInputElement && !onCheckbox)) return;
+    const at = lines.findIndex((l) => l.id === activeId);
+    const go = (i: number) => {
+      const l = lines[Math.max(0, Math.min(lines.length - 1, i))];
+      if (!l) return;
+      setActiveId(l.id);
+      const row = rowRefs.current.get(l.id);
+      row?.focus();
+      row?.scrollIntoView?.({ block: 'nearest' });
+    };
+    if (ev.key === 'ArrowDown' || ev.key === 'j') {
+      ev.preventDefault();
+      go(at < 0 ? 0 : at + 1);
+      return;
+    }
+    if (ev.key === 'ArrowUp' || ev.key === 'k') {
+      ev.preventDefault();
+      go(at < 0 ? 0 : at - 1);
+      return;
+    }
+    const l = lines[at];
+    if (!l) return;
+    if (ev.key === '1' || ev.key === '2' || ev.key === '3') {
+      const n = Number(ev.key) - 1;
+      if (suggestions.get(l.id)?.[n]) {
+        ev.preventDefault();
+        setChoice(l.id, { pick: n });
+      }
+      return;
+    }
+    // Space on the row's own checkbox already ticks it.
+    if ((ev.key === ' ' && !onCheckbox) || ev.key === 'x') {
+      ev.preventDefault();
+      if (chosen(l)) setChoice(l.id, { apply: !choiceOf(l.id).apply });
+    }
+  };
+
   const apply = () => {
     const byId = new Map(ticked.map((l) => [l.id, chosen(l)!]));
     rememberChoices(ticked.map((l) => ({ line: l, suggestion: byId.get(l.id)! })));
@@ -172,6 +217,7 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
               Only items without a rate
             </label>
             <span className="text-xs text-gray-500">Or type an SoR code in a row (e.g. 1.10) to take that exact item.</span>
+            <span className="text-xs text-gray-400">Keys: ↑ ↓ move between items · 1 2 3 pick a match · Space ticks</span>
           </div>
           {diffs.length > 0 && (
             <div role="status" aria-label="Rates that differ from the SoR" className="border-b border-rose-200 bg-rose-50 px-4 py-2.5 text-xs text-rose-900">
@@ -224,7 +270,7 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
               {onlyMissing ? 'Every item in this part already has a rate. Untick “Only items without a rate” to check them against the catalog.' : 'No items in this part.'}
             </p>
           ) : (
-            <div className="overflow-x-auto relative">
+            <div className="overflow-x-auto relative" role="group" tabIndex={0} aria-label="Rate suggestions: arrow keys move between items, 1 to 3 pick a match, Space ticks" onKeyDown={onKeys}>
               <table className="w-full min-w-[960px]" aria-label="Rate suggestions">
                 <thead className="text-xs text-gray-500">
                   <tr className="border-b border-gray-100">
@@ -251,7 +297,18 @@ export function RatePricingCard({ estimate, onChange, defaultOpen = false }: { e
                     const differs =
                       next && hasRate(l) && (Math.abs(next.supplyRate - l.supplyRate) > 0.5 || Math.abs(next.erectionRate - l.erectionRate) > 0.5 || Math.abs(next.testingRate - l.testingRate) > 0.5);
                     return (
-                      <tr key={l.id} className="border-b border-gray-100 align-top">
+                      <tr
+                        key={l.id}
+                        ref={(el) => {
+                          if (el) rowRefs.current.set(l.id, el);
+                          else rowRefs.current.delete(l.id);
+                        }}
+                        tabIndex={-1}
+                        onFocus={() => setActiveId(l.id)}
+                        onClick={() => setActiveId(l.id)}
+                        aria-current={activeId === l.id ? 'true' : undefined}
+                        className={`border-b border-gray-100 align-top outline-none ${activeId === l.id ? 'bg-sky-50' : ''}`}
+                      >
                         <td className="py-2 pl-4">
                           <input type="checkbox" aria-label={`Apply catalog rate to ${l.code || l.description.slice(0, 30)}`} disabled={!s} checked={c.apply && Boolean(s)} onChange={(ev) => setChoice(l.id, { apply: ev.target.checked })} />
                         </td>

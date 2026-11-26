@@ -6,10 +6,10 @@ import { withDefaults, type PdfSettings } from './format';
 import { layout } from './layout';
 import { loadFonts, renderPdf } from './renderPdf';
 import { sheetsFromWorkbook, type PdfSheet } from './sheets';
-import { columnWidths, placeEstimateSheets, type EstimateWorkbook } from './workbookSheets';
+import { placeEstimateSheets, type EstimateWorkbook } from './workbookSheets';
 import { BOQ_DOCUMENTS } from '@/features/boq-import/api';
 import { parseBoq } from '@/features/boq-import/parse';
-import { workbookToGrids } from '@/features/boq-import/readWorkbook';
+import { workbookGridsAndWidths } from '@/features/boq-import/readWorkbook';
 import type { DprDocuments } from '@/features/documents/types';
 import { getFile } from '@/lib/fileStore';
 import { sampleStore } from '@/lib/sampleStore';
@@ -69,8 +69,9 @@ export async function estimateWorkbooks(dprId: string, documents?: DprDocuments)
         continue;
       }
       try {
-        const grids = await workbookToGrids(stored.data);
-        workbooks.push({ fileName: name, grids, read: parseBoq(grids, name, section), widths: await columnWidths(stored.data) });
+        // One read of the file gives both the cells and the column widths.
+        const { grids, widths, merges } = await workbookGridsAndWidths(stored.data);
+        workbooks.push({ fileName: name, grids, read: parseBoq(grids, name, section), widths, merges });
       } catch {
         missing.push(name);
       }

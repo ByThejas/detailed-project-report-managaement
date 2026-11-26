@@ -27,6 +27,8 @@ export interface SheetSettings {
   note?: string;
   /** Column widths set on one page only, by page number within the sheet ("2"); other pages keep theirs. */
   pageColWeights?: Record<string, number[]>;
+  /** Cells merged in the editor, by row index: [first, last] column pairs. They replace the Excel's merges for that row ([] unmerges it). */
+  merges?: Record<string, [number, number][]>;
 }
 
 /** The settings a page can change for itself alone in the editor. */

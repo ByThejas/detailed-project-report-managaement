@@ -5,7 +5,7 @@ import { useToast } from '@/lib/toast';
 import type { Estimate } from '@/features/preparation/types';
 import type { DprRow } from '@/features/reports/types';
 import { DEFAULT_PDF_SETTINGS, PAPER, SHEET_TITLES, defaultOrientation, heading, projectLine, withDefaults, type BorderStyle, type Orientation, type PageStyle, type Paper, type PdfSettings, type SheetSettings } from './format';
-import { approxMeasure, columnWidths, layout, orderSheets, pageKey, pageSettings, sheetSettings, type Measure, type Page } from './layout';
+import { approxMeasure, columnWidths, layout, orderSheets, pageKey, pageSettings, rowSpans, sheetSettings, type Measure, type Page } from './layout';
 import { FONT_FILES, PREVIEW_FONT, downloadPdf, loadFonts } from './renderPdf';
 import { sheetsFromFile, type PdfSheet } from './sheets';
 import { estimateSheets, orderFor, settingsKey } from './estimatePdfBytes';
@@ -60,6 +60,84 @@ function Check({ label, checked, onChange }: { label: string; checked: boolean; 
       <input type="checkbox" checked={checked} onChange={(ev) => onChange(ev.target.checked)} />
       {label}
     </label>
+  );
+}
+
+/**
+ * Merging cells of the selected row: pick the first and last column and press Merge, or merge the whole row. The
+ * row's text then prints once across those columns. Unmerge splits them again; "As in the Excel" goes back to the file's.
+ */
+function MergeCells({
+  columns,
+  spans,
+  fromFile,
+  startCol,
+  onChange,
+  onReset,
+}: {
+  columns: string[];
+  spans: [number, number][];
+  fromFile: boolean;
+  startCol?: number;
+  onChange: (spans: [number, number][]) => void;
+  onReset: () => void;
+}) {
+  const last = columns.length - 1;
+  const [from, setFrom] = useState(startCol ?? 0);
+  const [to, setTo] = useState(last);
+  useEffect(() => {
+    setFrom(startCol ?? 0);
+    setTo(last);
+  }, [startCol, last]);
+  const add = (a: number, b: number) => {
+    const lo = Math.min(a, b);
+    const hi = Math.max(a, b);
+    if (hi === lo) return;
+    // A new merge replaces any it overlaps.
+    onChange([...spans.filter(([x, y]) => y < lo || x > hi), [lo, hi]].sort((p, q) => p[0] - q[0]));
+  };
+  const opt = (i: number) => (
+    <option key={i} value={i}>
+      {i + 1}. {columns[i]!.slice(0, 18)}
+    </option>
+  );
+  return (
+    <div className="space-y-1.5 border-t border-gray-100 pt-2">
+      <p className="text-xs font-medium text-gray-700">Merge cells</p>
+      <div className="flex items-center gap-1 text-xs">
+        <select aria-label="Merge from column" className="input h-7 min-w-0 flex-1 text-xs" value={from} onChange={(ev) => setFrom(Number(ev.target.value))}>
+          {columns.map((_, i) => opt(i))}
+        </select>
+        <span className="text-gray-500">to</span>
+        <select aria-label="Merge to column" className="input h-7 min-w-0 flex-1 text-xs" value={to} onChange={(ev) => setTo(Number(ev.target.value))}>
+          {columns.map((_, i) => opt(i))}
+        </select>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        <button type="button" className="btn-ghost h-7 px-2 text-xs" disabled={from === to} onClick={() => add(from, to)}>
+          Merge
+        </button>
+        <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => add(0, last)}>
+          Merge whole row
+        </button>
+        {spans.length > 0 && (
+          <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => onChange([])}>
+            Unmerge
+          </button>
+        )}
+        {!fromFile && (
+          <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={onReset}>
+            As in the Excel
+          </button>
+        )}
+      </div>
+      {spans.length > 0 && (
+        <p className="text-xs text-gray-500">
+          Merged: {spans.map(([a, b]) => `columns ${a + 1} to ${b + 1}`).join(', ')}
+          {fromFile ? ' (as in the Excel)' : ''}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -542,13 +620,27 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
                       const k = String(selection.index);
                       const rowHeights = { ...selSettings.rowHeights };
                       const bold = { ...selSettings.bold };
+                      const merges = { ...selSettings.merges };
                       delete rowHeights[k];
                       delete bold[k];
-                      setSheet(selSheet.key, { rowHeights, bold });
+                      delete merges[k];
+                      setSheet(selSheet.key, { rowHeights, bold, merges });
                     }}
                   >
                     Reset this row
                   </button>
+                  <MergeCells
+                    columns={selSheet.columns.map((c, i) => heading(c.header).text || `Column ${i + 1}`)}
+                    spans={rowSpans(selRow, selSettings, selection.index, selSheet.columns.length)}
+                    fromFile={selSettings.merges?.[String(selection.index)] === undefined}
+                    startCol={selection.col}
+                    onChange={(spans) => setSheet(selSheet.key, { merges: { ...selSettings.merges, [String(selection.index)]: spans } })}
+                    onReset={() => {
+                      const merges = { ...selSettings.merges };
+                      delete merges[String(selection.index)];
+                      setSheet(selSheet.key, { merges });
+                    }}
+                  />
                 </>
               )}
               {selection?.kind === 'col' && (
@@ -569,7 +661,7 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
                   />
                 </>
               )}
-              <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => setSheet(selSheet.key, { colWeights: undefined, pageColWeights: undefined, rowHeights: undefined, bold: undefined, title: undefined, cells: undefined, note: undefined })}>
+              <button type="button" className="btn-ghost h-7 px-2 text-xs" onClick={() => setSheet(selSheet.key, { colWeights: undefined, pageColWeights: undefined, rowHeights: undefined, bold: undefined, title: undefined, cells: undefined, note: undefined, merges: undefined })}>
                 <RotateCcw className="h-3 w-3" aria-hidden />
                 Reset this sheet’s text, rows and columns
               </button>
