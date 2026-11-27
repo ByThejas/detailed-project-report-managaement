@@ -34,20 +34,43 @@ function Section({ title, children }: { title: string; children: ReactNode }) {
   );
 }
 
-function Num({ label, value, onChange, step = 0.5, min = 0, max = 100 }: { label: string; value: number; onChange: (v: number) => void; step?: number; min?: number; max?: number }) {
+/**
+ * A number box that lets the user type freely: what is typed stays as typed while the box has focus, and is applied
+ * as soon as it is a number within range ("1" on the way to "12" is not forced up to the minimum). Leaving the box or
+ * pressing Enter applies it, brought within range; an empty or unreadable entry goes back to the current value.
+ */
+export function Num({ label, value, onChange, step = 0.5, min = 0, max = 100 }: { label: string; value: number; onChange: (v: number) => void; step?: number; min?: number; max?: number }) {
+  const shown = Number.isFinite(value) ? String(Math.round(value * 100) / 100) : '';
+  const [draft, setDraft] = useState<string | null>(null);
+  const finish = () => {
+    if (draft === null) return;
+    const v = Number(draft);
+    if (draft.trim() !== '' && Number.isFinite(v)) {
+      const clamped = Math.min(max, Math.max(min, v));
+      if (clamped !== value) onChange(clamped);
+    }
+    setDraft(null);
+  };
   return (
     <label className="flex items-center justify-between gap-3 text-[13px] text-gray-700">
       <span>{label}</span>
       <input
         type="number"
         className="input h-7 w-20 text-right"
-        value={Number.isFinite(value) ? Math.round(value * 100) / 100 : ''}
+        value={draft ?? shown}
         step={step}
         min={min}
         max={max}
+        onFocus={() => setDraft(shown)}
         onChange={(ev) => {
-          const v = Number(ev.target.value);
-          if (ev.target.value !== '' && Number.isFinite(v)) onChange(Math.min(max, Math.max(min, v)));
+          const t = ev.target.value;
+          setDraft(t);
+          const v = Number(t);
+          if (t.trim() !== '' && Number.isFinite(v) && v >= min && v <= max) onChange(v);
+        }}
+        onBlur={finish}
+        onKeyDown={(ev) => {
+          if (ev.key === 'Enter') (ev.target as HTMLInputElement).blur();
         }}
       />
     </label>
