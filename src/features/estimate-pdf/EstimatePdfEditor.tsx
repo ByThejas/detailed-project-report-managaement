@@ -731,6 +731,7 @@ export function EstimatePdfEditor({ dpr, estimate, onClose }: { dpr: DprRow; est
           <Section title="Rows and cells">
             <Num label="Minimum row height (pt)" value={pageStyle.minRowHeight} min={4} max={60} step={0.25} onChange={(v) => setPage({ minRowHeight: v })} />
             <Num label="Cell padding (pt)" value={pageStyle.cellPadding} min={0} max={12} step={0.2} onChange={(v) => setPage({ cellPadding: v })} />
+            <Num label="Row padding, top and bottom (pt)" value={pageStyle.rowPadding} min={0} max={12} step={0.2} onChange={(v) => setPage({ rowPadding: v })} />
             <Check label="Justify descriptions" checked={pageStyle.justify} onChange={(v) => setPage({ justify: v })} />
             <Check label="Repeat headings on every page" checked={pageStyle.repeatHeader} onChange={(v) => setPage({ repeatHeader: v })} />
             <p className="text-xs text-gray-500">On the page: click a row or a heading to select it, double-click any cell or heading to edit its text, drag a line between columns or under a row to resize.</p>

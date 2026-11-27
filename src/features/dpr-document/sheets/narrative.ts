@@ -8,7 +8,9 @@ import { esc } from './shared';
  * the template's Word measures times that factor, checked against the PDF.
  *
  * The text flows through the browser's own page breaking (CSS paged media), so long sections run on to the
- * next page the way Word runs them; header, footer and page border come from the @page rule.
+ * next page the way Word runs them; header, footer and page border come from the @page rule. Since 2026-11-27
+ * the pages print on A4 at 100%, as the Appinayakanahalli narration does (the Thyavanige print is the same page
+ * shrunk onto Letter; pass 'Letter' to get that), and the border is an image so it prints without "Background graphics".
  */
 
 export interface NarrativeBlockP {
@@ -62,6 +64,8 @@ export interface NarrativeData {
   title: string;
   /** Line under the title, e.g. "Operations Division, Benkikere, Tumakuru Operations Zone". */
   subline: string;
+  /** Nature of work, approval and budget under the title, as on the Appinayakanahalli narration; left out when all are blank. */
+  strip?: [string, string][];
   contents: { label: string; title: string; level: 0 | 1 | 2 }[];
   glance: [string, string][];
   /** The three figures under the glance table: BCR, IRR and payback (or route, towers and bays). */
@@ -69,46 +73,79 @@ export interface NarrativeData {
   report: NarrativeSection[];
 }
 
-/** Letter-paper measure (pt) of a Word measure in points on the A4 template. */
-const K = 0.9407;
-const pt = (word: number) => `${(word * K).toFixed(2)}pt`;
+/** Paper the text pages print on. A4 is the template's own page (the Appinayakanahalli narration); Letter is
+ * the same A4 page shrunk to 94.07% and centred, as Word printed the Thyavanige DPR. */
+export type NarrativePaper = 'A4' | 'Letter';
+const PAPER: Record<NarrativePaper, { w: number; h: number; k: number; ox: number }> = {
+  A4: { w: 595.28, h: 841.89, k: 1, ox: 0 },
+  Letter: { w: 612, h: 792, k: 0.9407, ox: 25.99 },
+};
 /** Word's single line for Bookman Old Style (hhea ascent + descent). */
 const SINGLE = 1.1724;
-/** Word puts the extra of 1.5 line spacing under each line; CSS splits it. Lift the text by half of it. */
-const lift = (fontWord: number, multiple: number) => `${(((multiple - 1) * SINGLE * fontWord * K) / 2).toFixed(2)}pt`;
 
 const BODY = '#1F1E1B';
 const ACCENT = '#1E4D6B';
 const MUTED = '#7C776C';
 const HAIR = '#E5E2DA';
 
-/** The page border and the header and footer rules, drawn once per page as the page background. */
-const PAGE_ART = `<svg xmlns='http://www.w3.org/2000/svg' width='612' height='792' viewBox='0 0 612 792'><rect x='48.92' y='23.03' width='513.56' height='745.37' fill='none' stroke='#000' stroke-width='0.85'/><rect x='78.7' y='41' width='454' height='0.5' fill='#D7D4CC'/><rect x='78.7' y='749.9' width='454' height='0.5' fill='#D7D4CC'/></svg>`;
+/**
+ * The template's page frame in A4 points, measured on the Appinayakanahalli narration: a black box border
+ * 24.5pt in from the paper edge, a grey rule under the header and one over the footer, and the 0.8in text margins.
+ */
+const FRAME = {
+  border: { x: 24.5, y: 24.5, w: 546.5, h: 793, stroke: 0.9 },
+  rule: { x: 56.0, w: 482.6, top: 43.75, bottom: 798, h: 0.5, color: '#D7D4CC' },
+  margin: { top: 70.9, left: 57.6, right: 57.6, bottom: 57.6 },
+  /** Header text top and footer text top, from the margin edges. */
+  headPad: 29.87,
+  footPad: 17.0,
+  /** Running header/footer text: 7.5pt capitals, tracked out. */
+  markSize: 7.54,
+  markTrack: 0.985,
+  markLine: 8.93,
+};
+
+/** The frame as one picture of the whole page. It goes in the top-left page corner as an image (not a page
+ * background), so it prints even with the print dialog's "Background graphics" off. */
+function pageArt(paper: NarrativePaper): string {
+  const P = PAPER[paper];
+  const { border: b, rule: r } = FRAME;
+  return `<svg xmlns='http://www.w3.org/2000/svg' width='${P.w}pt' height='${P.h}pt' viewBox='0 0 ${P.w} ${P.h}'><g transform='translate(${P.ox} 0) scale(${P.k})'><rect x='${b.x}' y='${b.y}' width='${b.w}' height='${b.h}' fill='none' stroke='#000' stroke-width='${b.stroke}'/><rect x='${r.x}' y='${r.top}' width='${r.w}' height='${r.h}' fill='${r.color}'/><rect x='${r.x}' y='${r.bottom}' width='${r.w}' height='${r.h}' fill='${r.color}'/></g></svg>`;
+}
 const svgUrl = (svg: string) => `url("data:image/svg+xml,${svg.replace(/#/g, '%23').replace(/</g, '%3C').replace(/>/g, '%3E')}")`;
 
-/** Text area of the Letter page, as measured on the PDF. */
-const M = { top: 66.7, left: 80.0, right: 80.4, bottom: 54.2 };
 /** Tables reach 4.7pt past the right margin (Word's table indent); the page keeps room for that so the browser doesn't shrink the page to fit. */
 const SPILL = 6;
 
 /** Word sets each glyph on a twip grid, which comes out about 0.024pt narrower per glyph than the font's own advance. */
 const TRACK = -0.012;
-const track = (word: number) => `${(word * K + TRACK).toFixed(3)}pt`;
 
 const quote = (s: string) => `"${s.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, ' ')}"`;
 
-export function narrativeCss(font: string, running: string): string {
-  const marginText = `font-family: ${font}; font-size: 7.09pt; letter-spacing: 1pt; text-transform: uppercase; color: ${MUTED}; white-space: nowrap;`;
+export function narrativeCss(font: string, running: string, paper: NarrativePaper = 'A4'): string {
+  const P = PAPER[paper];
+  const K = P.k;
+  /** This paper's measure (pt) of a Word measure in points on the A4 template. */
+  const pt = (word: number) => `${(word * K).toFixed(2)}pt`;
+  /** This paper's measure of a measure taken on the Letter print of the Thyavanige DPR. */
+  const L = (letter: number) => `${((letter / PAPER.Letter.k) * K).toFixed(2)}pt`;
+  /** Word puts the extra of 1.5 line spacing under each line; CSS splits it. Lift the text by half of it. */
+  const lift = (fontWord: number, multiple: number) => `${(((multiple - 1) * SINGLE * fontWord * K) / 2).toFixed(2)}pt`;
+  const track = (word: number) => `${(word * K + TRACK).toFixed(3)}pt`;
+  const F = FRAME;
+  const m = { top: F.margin.top * K, left: F.margin.left * K + P.ox, right: F.margin.right * K + P.ox, bottom: F.margin.bottom * K };
+  const n = (v: number) => v.toFixed(2);
+  const marginText = `font-family: ${font}; font-size: ${pt(F.markSize)}; letter-spacing: ${pt(F.markTrack)}; line-height: ${pt(F.markLine)}; text-transform: uppercase; color: ${MUTED}; white-space: nowrap; vertical-align: top;`;
   return `
 @page dpr-text {
-  size: 612pt 792pt;
-  margin: ${M.top}pt ${M.right - SPILL}pt ${M.bottom}pt ${M.left}pt;
-  background: ${svgUrl(PAGE_ART)} -${M.left}pt -${M.top}pt / 612pt 792pt no-repeat;
-  @top-left { content: "Karnataka Power Transmission Corporation Ltd."; ${marginText} vertical-align: top; padding-top: 28.1pt; line-height: 8.4pt; }
-  @top-right { content: "Detailed Project Report"; ${marginText} text-align: right; vertical-align: top; padding-right: ${SPILL - 0.3}pt; padding-top: 28.1pt; line-height: 8.4pt; }
-  @bottom-left { content: ${quote(running)}; ${marginText} letter-spacing: 0.965pt; vertical-align: top; padding-top: calc(0.16in + 4.8pt); line-height: 8.4pt; width: 460pt; }
+  size: ${P.w}pt ${P.h}pt;
+  margin: ${n(m.top)}pt ${n(m.right - SPILL)}pt ${n(m.bottom)}pt ${n(m.left)}pt;
+  @top-left-corner { content: ${svgUrl(pageArt(paper))}; vertical-align: top; text-align: left; margin: 0; padding: 0; }
+  @top-left { content: "Karnataka Power Transmission Corporation Ltd."; ${marginText} padding-top: ${pt(F.headPad)}; }
+  @top-right { content: "Detailed Project Report"; ${marginText} text-align: right; padding-right: ${n(SPILL + 1.6 * K - F.markTrack * K)}pt; padding-top: ${pt(F.headPad)}; }
+  @bottom-left { content: ${quote(running)}; ${marginText} padding-top: ${pt(F.footPad)}; width: ${pt(489)}; }
 }
-.dpr-text { page: dpr-text; --squeeze: -0.75pt; font-kerning: none; font-variant-ligatures: none; letter-spacing: ${TRACK}pt; padding-right: ${SPILL}pt; font-family: ${font}; font-size: ${pt(11)}; color: ${BODY}; line-height: ${pt(11 * SINGLE * 1.5)}; }
+.dpr-text { page: dpr-text; --squeeze: -${L(0.75)}; font-kerning: none; font-variant-ligatures: none; letter-spacing: ${TRACK}pt; padding-right: ${SPILL}pt; font-family: ${font}; font-size: ${pt(11)}; color: ${BODY}; line-height: ${pt(11 * SINGLE * 1.5)}; }
 .dpr-text * { box-sizing: border-box; }
 .dpr-text p { margin: 0 0 ${pt(6)}; }
 .dpr-text .r { position: relative; top: -${lift(11, 1.5)}; }
@@ -121,11 +158,11 @@ export function narrativeCss(font: string, running: string): string {
 .dpr-text h1 { font-size: ${pt(13)}; line-height: ${pt(13 * SINGLE * 1.5)}; }
 .dpr-text h1 .r { top: -${lift(13, 1.5)}; }
 .dpr-text h1 .no { color: ${ACCENT}; font-size: ${pt(12)}; }
-.dpr-text h2 { margin-top: calc(${pt(16)} + 0.6pt); margin-bottom: calc(${pt(8)} - 1.5pt); font-size: ${pt(13)}; line-height: ${pt(14 * SINGLE * 1.5)}; }
+.dpr-text h2 { margin-top: calc(${pt(16)} + ${L(0.6)}); margin-bottom: calc(${pt(8)} - ${L(1.5)}); font-size: ${pt(13)}; line-height: ${pt(14 * SINGLE * 1.5)}; }
 .dpr-text h2 .r { top: -${lift(14, 1.5)}; }
 .dpr-text h2 .no { color: ${ACCENT}; font-size: ${pt(14)}; }
 .dpr-text .sp { color: ${ACCENT}; font-size: ${pt(11)}; }
-.dpr-text .ruled { border-bottom: 2px solid ${BODY}; padding-bottom: ${pt(4)}; margin-left: -1.3pt; padding-left: 1.3pt; margin-right: -1.1pt; }
+.dpr-text .ruled { border-bottom: 2px solid ${BODY}; padding-bottom: ${pt(4)}; margin-left: -${L(1.3)}; padding-left: ${L(1.3)}; margin-right: -${L(1.1)}; }
 .dpr-text .first { margin-top: 0; }
 .dpr-text .sub { margin: ${pt(10)} 0 ${pt(4)}; font-size: ${pt(9.5)}; font-weight: 700; color: #000; letter-spacing: ${track(1)}; text-transform: uppercase; line-height: ${pt(9.5 * SINGLE * 1.5)}; text-align: justify; break-after: avoid; }
 .dpr-text .sub .r { top: -${lift(9.5, 1.5)}; }
@@ -157,22 +194,29 @@ export function narrativeCss(font: string, running: string): string {
 
 /* Title block and contents */
 .dpr-text .cv { margin: 0 -${pt(5)} 0 ${pt(5)}; padding: ${pt(4)} ${pt(5)}; text-align: center; }
-.dpr-text .cv-h { margin: 0 0 ${pt(13)}; font-size: ${pt(14)}; line-height: ${pt(14 * SINGLE)}; font-weight: 700; color: ${ACCENT}; letter-spacing: ${track(2)}; text-transform: uppercase; text-decoration: underline; text-decoration-thickness: 0.8pt; text-underline-offset: 2.2pt; }
-.dpr-text .cv-t { margin: 0 0 12.4pt; font-size: ${pt(14)}; line-height: 17pt; font-weight: 700; }
-.dpr-text .cv-t .r { top: 0.9pt; }
-.dpr-text .cv-s { margin: 0 0 84.3pt; line-height: ${pt(11 * SINGLE)}; color: #4B4740; }
+.dpr-text .cv-h { margin: 0 0 ${pt(13)}; font-size: ${pt(14)}; line-height: ${pt(14 * SINGLE)}; font-weight: 700; color: ${ACCENT}; letter-spacing: ${track(2)}; text-transform: uppercase; text-decoration: underline; text-decoration-thickness: ${L(0.8)}; text-underline-offset: ${L(2.2)}; }
+.dpr-text .cv-t { margin: 0 0 ${L(12.4)}; font-size: ${pt(14)}; line-height: ${L(17)}; font-weight: 700; }
+.dpr-text .cv-t .r { top: ${L(0.9)}; }
+.dpr-text .cv-s { margin: 0 0 ${L(84.3)}; line-height: ${pt(11 * SINGLE)}; color: #4B4740; }
+.dpr-text .cv-gap { height: ${L(87.6)}; }
+.dpr-text .cv-s.has-strip { margin-bottom: ${pt(7.7)}; }
+/* Nature of work / Approval / Budget under the title (the Appinayakanahalli narration) */
+.dpr-text .strip { width: calc(100% - ${pt(9.7)}); margin: 0 0 ${pt(28.7)} ${pt(10)}; text-align: left; }
+.dpr-text .strip td { width: 33.33%; border-bottom: ${pt(0.5)} solid ${HAIR}; padding: ${pt(4)} ${pt(5)} calc(${pt(4)} + ${pt(2)}); vertical-align: top; font-weight: 700; overflow-wrap: anywhere; }
+.dpr-text .strip tr:first-child td { font-size: ${pt(9)}; line-height: ${pt(9 * SINGLE)}; color: ${MUTED}; }
+.dpr-text .strip tr + tr td { font-size: ${pt(10)}; line-height: ${pt(10 * SINGLE)}; color: #000; }
 .dpr-text .toc-h { margin: 0 0 ${pt(6)}; font-weight: 700; color: ${ACCENT}; letter-spacing: ${track(2)}; text-transform: uppercase; text-align: left; }
 .dpr-text .toc { margin: 0 -${pt(5)} 0 ${pt(5)}; }
-.dpr-text .toc > div { position: relative; height: 22pt; border-bottom: ${pt(0.5)} solid ${HAIR}; break-inside: avoid; }
-.dpr-text .toc > .l0 { margin-right: 11pt; }
+.dpr-text .toc > div { position: relative; height: ${L(22)}; border-bottom: ${pt(0.5)} solid ${HAIR}; break-inside: avoid; }
+.dpr-text .toc > .l0 { margin-right: ${L(11)}; }
 .dpr-text .toc .lb { position: absolute; top: ${pt(4)}; font-size: ${pt(9)}; line-height: ${pt(9 * SINGLE)}; color: #000; }
-.dpr-text .toc .tt { position: absolute; top: ${pt(4)}; right: 4.7pt; font-size: ${pt(11)}; line-height: ${pt(11 * SINGLE)}; }
-.dpr-text .toc .l0 .lb { left: 4.7pt; } .dpr-text .toc .l0 .tt { left: 74.5pt; }
-.dpr-text .toc .l1 .lb { left: 73.2pt; } .dpr-text .toc .l1 .tt { left: 115.2pt; }
-.dpr-text .toc .l2 .lb { left: 93.1pt; } .dpr-text .toc .l2 .tt { left: 158.2pt; }
+.dpr-text .toc .tt { position: absolute; top: ${pt(4)}; right: ${L(4.7)}; font-size: ${pt(11)}; line-height: ${pt(11 * SINGLE)}; }
+.dpr-text .toc .l0 .lb { left: ${L(4.7)}; } .dpr-text .toc .l0 .tt { left: ${L(74.5)}; }
+.dpr-text .toc .l1 .lb { left: ${L(73.2)}; } .dpr-text .toc .l1 .tt { left: ${L(115.2)}; }
+.dpr-text .toc .l2 .lb { left: ${L(93.1)}; } .dpr-text .toc .l2 .tt { left: ${L(158.2)}; }
 
 @media screen {
-  .dpr-text { width: 612pt; margin: 0 auto 24px; padding: ${M.top}pt ${M.right - SPILL}pt ${M.bottom}pt ${M.left}pt; background: #fff; box-shadow: 0 2px 14px rgba(20,20,19,.18); }
+  .dpr-text { width: ${P.w}pt; margin: 0 auto 24px; padding: ${n(m.top)}pt ${n(m.right - SPILL)}pt ${n(m.bottom)}pt ${n(m.left)}pt; background: #fff; box-shadow: 0 2px 14px rgba(20,20,19,.18); }
 }
 `;
 }
@@ -240,12 +284,17 @@ const top = (no: string, title: string, ruled: boolean) =>
 
 /** The contents, glance and report pages, as one flowing block for the print document. */
 export function narrativeHtml(d: NarrativeData): string {
+  const shown = (d.strip ?? []).filter(([, v]) => v.trim());
+  const strip = shown.length
+    ? `<table class="strip"><tr>${d.strip!.map(([k]) => `<td>${esc(k)}</td>`).join('')}</tr><tr>${d.strip!.map(([, v]) => `<td>${lines(v || '—')}</td>`).join('')}</tr></table>`
+    : '';
   const toc = d.contents.map((c) => `<div class="l${c.level}"><span class="lb">${esc(c.label)}</span><span class="tt">${esc(c.title)}</span></div>`).join('');
   const kpi = d.kpi.length
     ? `<div class="blank"></div><table class="kpi"><tr>${d.kpi.map(([k]) => `<td>${esc(k)}</td>`).join('')}</tr><tr>${d.kpi.map(([, v]) => `<td>${esc(v || '—')}</td>`).join('')}</tr></table>`
     : '';
   return `<div class="dpr-text">
-<div class="cv"><p class="cv-h">Detailed Project Report</p><p class="cv-t"><span class="r">${lines(d.title)}</span></p>${d.subline.trim() ? `<p class="cv-s">${lines(d.subline)}</p>` : '<div style="height:87.6pt"></div>'}</div>
+<div class="cv"><p class="cv-h">Detailed Project Report</p><p class="cv-t"><span class="r">${lines(d.title)}</span></p>${d.subline.trim() ? `<p class="cv-s${strip ? ' has-strip' : ''}">${lines(d.subline)}</p>` : strip ? '' : '<div class="cv-gap"></div>'}</div>
+${strip}
 <p class="toc-h"><span class="r">Contents</span></p>
 <div class="toc">${toc}</div>
 ${top('01', 'Project at a glance', true)}

@@ -33,7 +33,7 @@ export interface SheetSettings {
 
 /** The settings a page can change for itself alone in the editor. */
 export const PAGE_STYLE_KEYS = [
-  'letterheadSize', 'projectSize', 'titleSize', 'headerSize', 'bodySize', 'lineSpacing', 'cellPadding', 'minRowHeight',
+  'letterheadSize', 'projectSize', 'titleSize', 'headerSize', 'bodySize', 'lineSpacing', 'cellPadding', 'rowPadding', 'minRowHeight',
   'borders', 'innerLine', 'outerLine', 'headerFill', 'repeatHeader', 'justify', 'marginMm', 'topMm', 'bottomMm', 'showNotes', 'letterhead',
 ] as const;
 export type PageStyle = Partial<Pick<PdfSettings, (typeof PAGE_STYLE_KEYS)[number]>>;
@@ -59,6 +59,8 @@ export interface PdfSettings {
   lineSpacing: number;
   /** Space between the text and the left and right cell borders. */
   cellPadding: number;
+  /** Space above and below the text of every table row, so single-line rows are not cramped against their lines. */
+  rowPadding: number;
   minRowHeight: number;
   borders: BorderStyle;
   innerLine: number;
@@ -94,6 +96,7 @@ export const DEFAULT_PDF_SETTINGS: PdfSettings = {
   bodySize: 6.73,
   lineSpacing: 1.3,
   cellPadding: 1.8,
+  rowPadding: 2.2,
   minRowHeight: 8.76,
   borders: 'grid',
   innerLine: 0.48,

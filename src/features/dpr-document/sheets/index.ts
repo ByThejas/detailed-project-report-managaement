@@ -187,7 +187,11 @@ export function narrativeData(
 
   const loc = (D.location || '').split(';');
   const subline = (loc.length > 1 ? loc[loc.length - 1]! : D.jurisdiction || '').trim();
-  return { running: (D.runningTitle || dpr.project).trim(), title: (D.nameOfWork || dpr.project).trim(), subline, contents, glance, kpi, report };
+  const apw = (D.apwCode || '').trim();
+  const fy = (D.financialYear || '').trim();
+  const budget = apw ? `APW Code: ${apw}${fy ? `, ${fy}` : ''}` : (D.budgetProvision || fy).trim();
+  const strip: [string, string][] = [['Nature of work', (D.projectNature || '').trim()], ['Approval', (D.approval || '').trim()], ['Budget', budget]];
+  return { running: (D.runningTitle || dpr.project).trim(), title: (D.nameOfWork || dpr.project).trim(), subline, strip, contents, glance, kpi, report };
 }
 
 /** Bookman Old Style where installed (Windows with Office), else the bundled URW Bookman. */
@@ -202,7 +206,7 @@ function bookmanFaces(base: string): string {
 
 /**
  * The whole printable DPR in the Thyavanige order of its own pages: the A4 cover, the contents, glance and
- * report pages (Letter, as the Thyavanige PDF), then the PERT chart and the BCR (A4 landscape). The
+ * report pages (A4, as the Appinayakanahalli narration), then the PERT chart and the BCR (A4 landscape). The
  * estimates and the attached annexures are put in between when the final DPR is built.
  */
 export function dprHtml(s: SheetSet): string {
@@ -212,7 +216,7 @@ export function dprHtml(s: SheetSet): string {
   return sheetDocument({
     title: `DPR - ${s.name}`,
     fonts: `${fontFaces(parts.flatMap((p) => p.fonts), base)}\n${bookmanFaces(base)}`,
-    css: `${parts.map((p) => p.css).join('\n')}\n${narrativeCss(`'${BOOKMAN}', 'Bookman Old Style', serif`, s.text.running)}`,
+    css: `${parts.map((p) => p.css).join('\n')}\n${narrativeCss(`'${BOOKMAN}', 'Bookman Old Style', serif`, s.text.running, 'A4')}`,
     pages: [...cover!.pages, { flow: narrativeHtml(s.text) }, ...pert!.pages, ...(bcr ? bcr.pages : [])],
     script: parts.map((p) => p.script ?? '').join('\n'),
     note: 'Print with Chrome or Edge: Destination “Save as PDF”, Margins “Default”, Scale 100%, Headers and footers off.',

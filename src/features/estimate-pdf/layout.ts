@@ -183,6 +183,12 @@ export function layout(sheets: PdfSheet[], s: PdfSettings, measure: Measure): Pa
   return pages;
 }
 
+/** A cell's text without leading or trailing blank lines, and with runs of blank lines inside kept to one line break. */
+const tidy = (t: string) => t.replace(/[ \t]+\n/g, '\n').replace(/\n{2,}/g, '\n').trim();
+
+/** A heading row: text in the first columns up to the description, and nothing after it. */
+const isHeading = (cells: string[], desc: number) => desc >= 0 && cells.slice(0, desc + 1).some((t) => t) && cells.slice(desc + 1).every((t) => !t);
+
 /** Where a line of text sits: lines are centred as a block in their box, on the capital height, as Excel prints them. */
 const baselines = (count: number, top: number, height: number, size: number, step: number) => {
   const first = top + height / 2 - ((count - 1) * step) / 2 + size * 0.34 + size * 0.06;
@@ -277,7 +283,8 @@ function layoutPage(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure:
     const lines = cells.map((c, i) => wrapLines(c, Math.max(cellWidth(i) - padL - padR, 4), size, cellBold?.(i) ?? bold, measure));
     const count = Math.max(...lines.map((l) => l.length));
     if (abs) return { lines, height: fixed ?? count * size * spacing + rowExtra(A.body.extra) };
-    const natural = count * size * s.lineSpacing;
+    // Even space above and below the text, so a one-line row has room like a wrapped one.
+    const natural = count * size * s.lineSpacing + 2 * (s.rowPadding ?? 0);
     return { lines, height: fixed ?? Math.max(natural, s.minRowHeight) };
   };
   const drawCell = (lines: WrappedLine[], i: number, top: number, height: number, size: number, bold: boolean, align: Align, justify: boolean, lstep = size * s.lineSpacing, x0 = xs[i]!, x1 = xs[i + 1]!) => {
@@ -385,12 +392,18 @@ function layoutPage(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure:
   }
   startTable(sheetPage === 1 || s.repeatHeader);
 
+  const totalsBottom = bottom + s.bottomMm * MM * 0.4;
+  /** The height a row would take, for looking ahead at the rows after the one being placed. */
+  const heightOf = (r: (typeof sheet.rows)[number], i: number) =>
+    rowBlock(r.cells.map((c, k) => tidy(ss.cells?.[`${i}:${k}`] ?? (r.total && k === desc ? totalLabel(c) : c))), sizes.body, ss.bold?.[String(i)] ?? r.bold, ss.rowHeights?.[String(i)]).height;
+
   let index = start;
   for (; index < sheet.rows.length; index++) {
     const row = sheet.rows[index]!;
     const bold = ss.bold?.[String(index)] ?? row.bold;
     // Closing rows print their label in bold, centred under the description.
-    const cells = row.cells.map((c, i) => ss.cells?.[`${index}:${i}`] ?? (row.total && i === desc ? totalLabel(c) : c));
+    // Blank lines a workbook cell carries before, after or between its text print as empty space; they are left out.
+    const cells = row.cells.map((c, i) => tidy(ss.cells?.[`${index}:${i}`] ?? (row.total && i === desc ? totalLabel(c) : c)));
     // Item numbers like A1, A12 print bold; sub-items (a, b, i, 1) do not.
     const cellBold = (i: number) => (row.total && i === desc) || bold || (roles[i] === 'sl' && /^[A-Z]{1,3}\d+$/.test(cells[i]!.trim()));
     // Merged cells print their text once, across the merged columns; the text of every cell under it is kept, joined.
@@ -407,7 +420,22 @@ function layoutPage(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure:
     };
     const block = rowBlock(cells, sizes.body, bold, ss.rowHeights?.[String(index)], cellBold, cellWidth);
     // A row that does not fit starts the next page (a page always takes at least one row).
-    if (y + block.height > bottom && page.table!.rows.some((r) => r.index >= 0)) break;
+    const started = page.table!.rows.some((r) => r.index >= 0);
+    // Closing rows (sub total, miscellaneous, grand total) may run a little into the bottom margin rather than go over
+    // to a page of their own.
+    if (y + block.height > (row.total ? totalsBottom : bottom) && started) break;
+    // The last item row goes over with the closing rows when they would not fit after it, so they are never alone.
+    const rest = sheet.rows.slice(index + 1);
+    if (!row.total && started && rest.length && rest.every((r) => r.total)) {
+      const restHeight = rest.reduce((a, r, k) => a + heightOf(r, index + 1 + k), 0);
+      if (y + block.height + restHeight > totalsBottom) break;
+    }
+    // A heading (an item group's name, nothing in the figure columns) is not left alone at the foot of a page: it goes
+    // over with the first row under it.
+    const next = sheet.rows[index + 1];
+    if (next && !abs && isHeading(cells, desc) && started) {
+      if (y + block.height + heightOf(next, index + 1) > bottom) break;
+    }
     block.lines.forEach((l, i) => {
       if (covered(i)) return;
       const sp = spanAt(i);

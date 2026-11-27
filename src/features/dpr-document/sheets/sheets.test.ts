@@ -94,10 +94,12 @@ describe('printable cover, PERT and BCR sheets', () => {
     ]);
   });
 
-  it('prints the whole DPR in one document: A4 cover, Letter text pages, A4 landscape PERT and BCR', () => {
+  it('prints the whole DPR in one document: A4 cover, A4 text pages with the page border as an image (prints without background graphics), A4 landscape PERT and BCR', () => {
     const html = dprHtml(sheetSet(THY_DPR, thyavanigeEstimate()));
     expect(html).toContain('@page dpr-text');
-    expect(html).toContain('size: 612pt 792pt;');
+    expect(html).toContain('size: 595.28pt 841.89pt;');
+    expect(html).toContain('@top-left-corner { content: url("data:image/svg+xml,');
+    expect(html).toContain('<td>Nature of work</td>');
     expect(html).toContain('@page p-210mm-297mm { size: 210mm 297mm; margin: 0; }');
     expect(html).toContain('@page p-297mm-210mm { size: 297mm 210mm; margin: 0; }');
     expect(html).toContain('66/11 kV Thyavanige station — additional 1×20 MVA transformer and LILO arrangement');
