@@ -161,6 +161,61 @@ export function columnWidths(sheet: PdfSheet, ss: SheetSettings, tableWidth: num
   return weights.map((w) => (Math.max(w, 0.1) / sum) * tableWidth);
 }
 
+/**
+ * Columns of figures, units and quantities widened to their longest figure (and heading word) at the printed size,
+ * taking the room from the widest text column, so an amount such as 2,18,37,000.00 never breaks across lines. A sheet
+ * with so many figure columns that its text column would drop under a third of the table at the set size prints its
+ * table text smaller, just enough to keep that third (not under 8 pt). Widths the user set are kept as set.
+ */
+function fitFigures(sheet: PdfSheet, ss: SheetSettings, widths: number[], s: PdfSettings, measure: Measure): { widths: number[]; body: number; header: number } {
+  const set = { widths, body: s.bodySize, header: s.headerSize };
+  if (ss.colWeights?.length === sheet.columns.length || widths.length < 2) return set;
+  const total = widths.reduce((a, b) => a + b, 0);
+  const textCol = widths.indexOf(Math.max(...widths));
+  const pad = 2 * s.cellPadding + 1;
+  const words = (t: string) => t.split(/\s+/).filter(Boolean);
+  const fit = (body: number, header: number) => {
+    const need = widths.map((w, i) => {
+      if (i === textCol) return 0;
+      let m = Math.max(0, ...words(heading(sheet.columns[i]!.header).text).map((x) => measure(x, header, true)));
+      for (const r of sheet.rows) {
+        const t = (r.cells[i] ?? '').trim();
+        if (!t) continue;
+        // A figure must fit whole; other text may wrap at spaces.
+        const longest = /^[-\d,.()%\s]+$/.test(t) ? measure(t, body, r.bold) : Math.max(...words(t).map((x) => measure(x, body, r.bold)));
+        m = Math.max(m, longest);
+      }
+      return Math.max(w, m + pad);
+    });
+    // A group heading ("Testing and Commissioning") sits on one line across its columns: they share what it needs.
+    const hs = sheet.columns.map((c) => heading(c.header));
+    for (let i = 0; i < hs.length; ) {
+      const g = hs[i]!.group;
+      let j = i;
+      while (g && j + 1 < hs.length && hs[j + 1]!.group === g) j++;
+      if (g && !(textCol >= i && textCol <= j)) {
+        const span = need.slice(i, j + 1).reduce((a, b) => a + b, 0);
+        const short = measure(g, header, true) + pad - span;
+        if (short > 0) for (let k = i; k <= j; k++) need[k] = need[k]! + short / (j - i + 1);
+      }
+      i = j + 1;
+    }
+    const others = need.reduce((a, n, i) => a + (i === textCol ? 0 : n), 0);
+    return { need, text: total - others };
+  };
+  const scale = s.headerSize / s.bodySize;
+  let body = s.bodySize;
+  let f = fit(body, body * scale);
+  const keep = Math.min(widths[textCol]!, total / 3);
+  while (f.text < keep && body > 8) {
+    body = Math.max(8, body - 0.25);
+    f = fit(body, body * scale);
+  }
+  const out = f.need.map((n, i) => (i === textCol ? Math.max(f.text, total * 0.15) : n));
+  const sum = out.reduce((a, b) => a + b, 0);
+  return { widths: out.map((w) => (w * total) / sum), body, header: body * scale };
+}
+
 /** A part abstract made by the app (Sl. No. / Particulars / Amount), printed in KPTCL's abstract layout. */
 export const abstractLayout = (sheet: PdfSheet) => isPartAbstract(sheet.key) && sheet.columns.length === 3 && !sheet.weights;
 
@@ -218,7 +273,8 @@ function layoutPage(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure:
   const right = left + tableWidth;
   const topMargin = s.topMm * MM;
   const bottom = h - s.bottomMm * MM;
-  const widths = columnWidths(sheet, ss, tableWidth);
+  const fitted = fitFigures(sheet, ss, columnWidths(sheet, ss, tableWidth), s, measure);
+  const widths = fitted.widths;
   const xs = widths.reduce<number[]>((acc, cw) => [...acc, acc.at(-1)! + cw], [left]);
   // A part abstract keeps KPTCL's abstract proportions, scaled to the page as Excel's fit-to-width print does; the
   // editor's sizes, spacing and padding still apply, relative to their standard values.
@@ -226,15 +282,8 @@ function layoutPage(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure:
   const A = ABSTRACT_STYLE;
   const D = DEFAULT_PDF_SETTINGS;
   const sc = tableWidth / A.widths.reduce((a, b) => a + b, 0);
-  const sizes = abs
-    ? {
-        letterhead: A.letterhead.size * sc * (s.letterheadSize / D.letterheadSize),
-        project: A.project.size * sc * (s.projectSize / D.projectSize),
-        title: A.title.size * sc * (s.titleSize / D.titleSize),
-        header: A.header.size * sc * (s.headerSize / D.headerSize),
-        body: A.body.size * sc * (s.bodySize / D.bodySize),
-      }
-    : { letterhead: s.letterheadSize, project: s.projectSize, title: s.titleSize, header: s.headerSize, body: s.bodySize };
+  // Text prints at the sizes set (KPTCL letterhead 16, the DPR's title 14, the rest 12), on the abstracts too.
+  const sizes = { letterhead: s.letterheadSize, project: s.projectSize, title: s.titleSize, header: fitted.header, body: fitted.body };
   const spacing = abs ? A.lineStep * (s.lineSpacing / D.lineSpacing) : s.lineSpacing;
   const pad = s.cellPadding;
   const padL = abs ? A.padLeft * sc * (pad / D.cellPadding) : pad;
@@ -392,7 +441,8 @@ function layoutPage(sheet: PdfSheet, ss: SheetSettings, s: PdfSettings, measure:
   }
   startTable(sheetPage === 1 || s.repeatHeader);
 
-  const totalsBottom = bottom + s.bottomMm * MM * 0.4;
+  // Closing rows keep to the page's bottom margin too, which is left clear for punching.
+  const totalsBottom = bottom;
   /** The height a row would take, for looking ahead at the rows after the one being placed. */
   const heightOf = (r: (typeof sheet.rows)[number], i: number) =>
     rowBlock(r.cells.map((c, k) => tidy(ss.cells?.[`${i}:${k}`] ?? (r.total && k === desc ? totalLabel(c) : c))), sizes.body, ss.bold?.[String(i)] ?? r.bold, ss.rowHeights?.[String(i)]).height;

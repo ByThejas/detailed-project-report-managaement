@@ -40,6 +40,8 @@ export type PageStyle = Partial<Pick<PdfSettings, (typeof PAGE_STYLE_KEYS)[numbe
 
 export interface PdfSettings {
   version: 2;
+  /** Which default text sizes and margins the saved settings were made with; older ones take the current defaults. */
+  styleVersion?: number;
   paper: Paper;
   /** Letterhead lines on the first page of each sheet, each in its own boxed row. */
   letterhead: string[];
@@ -86,17 +88,20 @@ export const DEFAULT_PDF_SETTINGS: PdfSettings = {
   paper: 'letter',
   letterhead: ['KARNATAKA POWER TRANSMISSION CORPORATION LIMITED'],
   showNotes: true,
+  styleVersion: 3,
   marginMm: 7.43,
-  topMm: 5.08,
-  bottomMm: 19.05,
-  letterheadSize: 10.1,
-  projectSize: 9.02,
-  titleSize: 7.81,
-  headerSize: 6.73,
-  bodySize: 6.73,
+  // Room above and below the table, clear of the holes punched for filing.
+  topMm: 18,
+  bottomMm: 20,
+  // The user's sizes (2026-11-27): KPTCL letterhead 16, the DPR's title 14, everything else 12.
+  letterheadSize: 16,
+  projectSize: 14,
+  titleSize: 12,
+  headerSize: 12,
+  bodySize: 12,
   lineSpacing: 1.3,
   cellPadding: 1.8,
-  rowPadding: 2.2,
+  rowPadding: 5.2,
   minRowHeight: 8.76,
   borders: 'grid',
   innerLine: 0.48,
@@ -132,8 +137,18 @@ export function withDefaults(s: Partial<PdfSettings> | { version?: number } | nu
     }
     return { ...DEFAULT_PDF_SETTINGS, sheets, sheetOrder: saved.sheetOrder, pageOrder: saved.pageOrder };
   }
+  // Sizes, row spacing and margins saved before the current defaults give way to them; the user's text, sheet choices,
+  // column widths and order are kept.
+  if ((saved.styleVersion ?? 0) < STYLE_VERSION) {
+    const drop = (o: object) => Object.fromEntries(Object.entries(o).filter(([k]) => !(STYLE_RESET as readonly string[]).includes(k)));
+    const pages = saved.pages ? Object.fromEntries(Object.entries(saved.pages).map(([k, v]) => [k, drop(v ?? {}) as PageStyle])) : undefined;
+    return { ...DEFAULT_PDF_SETTINGS, ...drop(saved), ...(pages ? { pages } : {}), version: 2, styleVersion: STYLE_VERSION, sheets: { ...(saved.sheets ?? {}) } };
+  }
   return { ...DEFAULT_PDF_SETTINGS, ...saved, version: 2, sheets: { ...(saved.sheets ?? {}) } };
 }
+
+const STYLE_VERSION = 3;
+const STYLE_RESET = ['letterheadSize', 'projectSize', 'titleSize', 'headerSize', 'bodySize', 'rowPadding', 'minRowHeight', 'topMm', 'bottomMm', 'lineSpacing', 'cellPadding'] as const;
 
 /** Signatures go under the abstracts, where KPTCL's estimates carry them. */
 export const isAbstract = (key: string) => /abstract/i.test(key);

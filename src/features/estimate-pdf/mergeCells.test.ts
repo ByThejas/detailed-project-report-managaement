@@ -24,7 +24,8 @@ describe('merged cells in printed workbook sheets', () => {
     expect(s.rows[0]!.spans).toBeUndefined();
     const pages = layout([s], { ...withDefaults({}), sheetOrder: [], pageOrder: [] }, approxMeasure);
     const noteText = pages[0]!.ops.filter((o) => o.kind === 'text' && /Note:The|eactuls/.test(o.text));
-    expect(noteText.length).toBe(1);
+    // One cell across the row: at 12 pt the note takes two lines at most, not a line per word in the Sl. No column.
+    expect(noteText.length).toBeLessThanOrEqual(2);
   });
 
   it('guesses the merge for an .xls, whose merges are not read', () => {

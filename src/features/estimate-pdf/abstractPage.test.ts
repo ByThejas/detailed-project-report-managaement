@@ -62,9 +62,9 @@ describe('KPTCL abstract page', () => {
     const xs = page!.table!.xs;
     const w = xs.slice(1).map((x, i) => x - xs[i]!);
     expect(w[0]! / w[1]!).toBeCloseTo(50.5 / 496.6, 3);
-    // Rows of one line are 26.3 pt at Excel's 100%, two lines 41.6 pt.
+    // Rows of one line are 26.3 pt at Excel's 100%, two lines 41.6 pt; the text is now 12 pt, so roughly that ratio.
     const rows = page!.table!.rows.filter((r) => r.index >= 0);
-    expect(rows[6]!.h / rows[0]!.h).toBeCloseTo(41.6 / 26.3, 2);
+    expect(rows[6]!.h / rows[0]!.h).toBeCloseTo(41.6 / 26.3, 1);
   });
 
   it('drops the sample template’s items and statutory charge once an estimate comes from a file', () => {
@@ -95,7 +95,7 @@ describe('KPTCL abstract page', () => {
     const before = layout(sheets, withDefaults({}), measure);
     const supply = before.filter((p) => p.sheet === 'Line Supply');
     expect(supply.length).toBeGreaterThan(1);
-    const after = layout(sheets, withDefaults({ pages: { 'Line Supply#2': { bodySize: 9, innerLine: 1.5 } }, sheets: { 'Line Supply': { pageColWeights: { '2': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1] } } } }), measure);
+    const after = layout(sheets, withDefaults({ styleVersion: 3, pages: { 'Line Supply#2': { bodySize: 9, innerLine: 1.5 } }, sheets: { 'Line Supply': { pageColWeights: { '2': [1, 1, 1, 1, 1, 1, 1, 1, 1, 1] } } } }), measure);
     const ops = (p: { ops: unknown[] }) => JSON.stringify(p.ops);
     // Every other sheet's pages, and the pages before it, are drawn exactly as before. (Rows that page 2 no longer
     // holds move on to page 3, as text does, but page 3 keeps its own sizes and lines.)

@@ -109,23 +109,32 @@ describe('Abstract & Estimate PDF', () => {
   });
 
   it('prints in KPTCL’s format: Letter landscape, boxed letterhead, project and title, grouped headings', async () => {
-    const pages = layout(await sheetsOf(estimate()), DEFAULT_PDF_SETTINGS, await loadFonts());
+    const measure = await loadFonts();
+    const pages = layout(await sheetsOf(estimate()), DEFAULT_PDF_SETTINGS, measure);
     const a = pages.find((p) => p.sheet === 'Part A Electrical')!;
     expect([a.w, a.h]).toEqual([792, 612]);
     const texts = a.ops.flatMap((o) => (o.kind === 'text' ? [o] : []));
     const find = (t: string) => texts.find((o) => o.text === t)!;
-    expect(find('KARNATAKA POWER TRANSMISSION CORPORATION LIMITED')).toMatchObject({ size: 10.1, bold: true });
-    expect(find('Supply of station materials, erection and commissioning')).toMatchObject({ size: 7.81, bold: true });
+    expect(find('KARNATAKA POWER TRANSMISSION CORPORATION LIMITED')).toMatchObject({ size: 16, bold: true });
+    expect(find('Supply of station materials, erection and commissioning')).toMatchObject({ size: 12, bold: true });
     // The project name without the app's id.
-    expect(texts.some((o) => o.size === 9.02 && o.text.includes('(') )).toBe(false);
-    for (const t of ['Supply of Material', 'Erection charges', 'Testing and Commissioning', 'Sl No.', 'Quantity', 'Name of the Equipment/Materials']) expect(find(t)).toMatchObject({ size: 6.73, bold: true });
+    expect(texts.some((o) => o.size === 14 && o.text.includes('(') )).toBe(false);
+    // Table headings print at 12 pt, or a little smaller on a sheet this wide so every figure fits on one line.
+    const hsize = find('Quantity').size;
+    expect(hsize).toBeGreaterThanOrEqual(8);
+    expect(hsize).toBeLessThanOrEqual(12);
+    for (const t of ['Supply of Material', 'Erection charges', 'Testing and Commissioning', 'Quantity', 'Name of the Equipment/Materials']) expect(find(t)).toMatchObject({ size: hsize, bold: true });
     expect(texts.filter((o) => o.text === '(in Rs.)')).toHaveLength(6);
     expect(find('Grand Total')).toMatchObject({ bold: true });
     expect(find('Miscellaneous and other unforeseen materials')).toMatchObject({ bold: true });
-    // The standard column widths: Sl No 25.32, Unit 27.36, Quantity 37.56, then the rate and amount pairs.
+    // The columns fill the table, the description keeps the most room, and each figure fits its column on one line.
     const xs = a.table!.xs;
-    const w = xs.slice(1).map((x, i) => Math.round((x - xs[i]!) * 100) / 100);
-    expect([w[0], ...w.slice(2)]).toEqual([25.32, 27.36, 37.56, 62.52, 69.12, 50.88, 59.28, 50.88, 52.56]);
+    const w = xs.slice(1).map((x, i) => x - xs[i]!);
+    expect(w[1]).toBe(Math.max(...w));
+    for (const o of texts.filter((t) => /^[\d,]+\.\d\d$/.test(t.text))) {
+      const col = xs.findIndex((x, i) => o.x >= x && o.x < xs[i + 1]!);
+      expect(o.x + measure(o.text, o.size, o.bold)).toBeLessThanOrEqual(xs[col + 1]! + 0.01);
+    }
     expect(a.ops.every((o) => o.kind !== 'line' || o.width === 0.48)).toBe(true);
     // No line between a group's rate and amount columns inside the group heading row.
     const header = a.table!.rows[0]!;
@@ -136,7 +145,7 @@ describe('Abstract & Estimate PDF', () => {
 
   it('keeps the user’s text and sheet choices from the first format, and resets the look', () => {
     const s = withDefaults({ version: 1, titleSize: 11, bodySize: 8.5, sheets: { 'Part B Civil': { include: false, colWeights: [1, 2], title: 'Civil' } } } as never);
-    expect(s.bodySize).toBe(6.73);
+    expect(s.bodySize).toBe(12);
     expect(s.sheets['Part B Civil']).toMatchObject({ include: false, title: 'Civil' });
     expect(s.sheets['Part B Civil']!.colWeights).toBeUndefined();
   });
